@@ -70,9 +70,11 @@ class Repository:
 
 
 
-    def get_current_repo(self, bucket_name): #gets last repo object of current user
+    def get_current_repo(self, projectfolder): #gets last repo object of current user
         username = self.user.username
-        repo = self.user.github.get_repo(username + '/' + bucket_name)
+        repo_path=os.path.join(username,projectfolder)
+        print(f"getcurrentrepo {repo_path}")
+        repo = self.user.github.get_repo(username + '/' + projectfolder)
         print(f"Repo object retrieved from github: {repo}")
         return repo
 
@@ -90,49 +92,49 @@ class Repository:
                 print(f"Repository already exists! No need to create another one")
                 return
 
-    def create_new_subdirectory(self, bucket_name, object_name):
-        repo = self.get_current_repo(bucket_name)
-        print(f"create_new_subdir, repo: {repo}")
-        print(f"create_new_subdir, directory_name: {object_name}")
+    def create_new_subdirectory(self, object_path, project_folder):
+        print(f"Repo: {project_folder}")
+        print(f"Object path: {object_path}")
+        repo = self.get_current_repo(project_folder)
+
 
         file_ext = [".png", ".jpeg", ".jpg", ".pdf"]
-        bucket = storage.bucket(bucket_name)
-        blob = bucket.blob(object_name)
+        bucket = storage.bucket()  # usa il bucket di default
+        blob = bucket.blob(object_path)
 
         try:
-            if "." in object_name:  # it's a file
-                if any(object_name.lower().endswith(ext) for ext in file_ext):
+            if "." in object_path:  # è un file
+                if any(object_path.lower().endswith(ext) for ext in file_ext):
                     content_bytes = blob.download_as_bytes()
-
                     retry_with_backoff(lambda: self.upload_binary_file(
-                        bucket_name, object_name, content_bytes, f"added image {object_name}"
+                        project_folder, object_path, content_bytes, f"Added image {object_path}"
                     ))
-                    print(f"Binary file {object_name} uploaded to GitHub")
-
-
+                    print(f"Binary file {object_path} uploaded to GitHub")
                 else:
                     content = blob.download_as_text()
                     retry_with_backoff(lambda: repo.create_file(
-                        object_name, f"created {object_name}", content
+                        object_path, f"Created {object_path}", content
                     ))
-                    print(f"Text file {object_name} created on GitHub")
-
+                    print(f"Text file {object_path} created on GitHub")
             else:
-                # Create a placeholder .gitignore in the folder
+                # Creazione di una directory "vuota" = placeholder .gitignore
                 retry_with_backoff(lambda: repo.create_file(
-                    os.path.join(object_name, ".gitignore"), f"created {object_name}", ""
+                    os.path.join(object_path, ".gitignore"), f"Created folder {object_path}", ""
                 ))
-                print(f"Folder {object_name} created on GitHub")
+                print(f"Folder {object_path} created on GitHub")
 
         except GithubException as e:
             print("GitHub exception:", e)
         except Exception as e:
             print("Error during upload or download:", e)
 
-
- #   def delete_subdirectory(self, bucket_name,folder_name):
-  #      repo = self.get_current_repo(bucket_name)
-  #      utils.push(self.get_last_repo_path(), "Removed dir " + folder_name)
+    def delete_file(self, file_path,folder_name):
+        repo = self.get_current_repo(folder_name)
+        contents = repo.get_contents(file_path)
+        try:
+         repo.delete_file(contents.path, f"removed {file_path}", contents.sha)
+        except GithubException as e:
+            print("GitHub exception:", e)
 
 
 

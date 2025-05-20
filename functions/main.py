@@ -1,5 +1,8 @@
 # The Cloud Functions for Firebase SDK to create Cloud Functions and set up triggers.
 import os
+
+from google.cloud import storage
+
 from repomanager import Repository
 from user import User
 
@@ -23,30 +26,43 @@ u = User(token)
 repository = Repository(u)
 
 
-@storage_fn.on_object_finalized(bucket="(default)")
+
+#we should know which latex project the user decides to open
+bucket="cloudfunctionspoliba.firebasestorage.app"
+
+@storage_fn.on_object_finalized(bucket=bucket)
 def folder_created(event: storage_fn.CloudEvent[storage_fn.StorageObjectData]):
      """it's triggered when a new folder is created in storage or a new file is uploaded"""
      print(" Cloud Function Triggered: folder_created")
      object_data = event.data
      bucket_name=object_data.bucket
-     # every bucket=gitrepository
+     full_path = object_data.name  # "project001/subfolder/file.txt"
+     folder_path = full_path.split('/')[0] #project001
+     # every project=gitrepository
+     #every project has a folder with subfolders and files in the buckets
+     #each folder is named 'project00n', with n starting form 1
      #if repository with bucket doesn't exist it creates one
-     repository.create_new_repo(bucket_name)
-     print(f"Bucket: {bucket_name}")
-     folder_name = object_data.name
-     print(f"{folder_name} was created in {bucket_name}")
-     repository.create_new_subdirectory(bucket_name,folder_name)
 
-@storage_fn.on_object_deleted(bucket="(default)")
+     repository.create_new_repo(folder_path)
+     print(f"Bucket: {bucket_name}")
+
+     print(f"{folder_path} was created in {bucket_name}")
+     repository.create_new_subdirectory(full_path,folder_path)
+
+@storage_fn.on_object_deleted(bucket=bucket)
 def folder_deleted(event: storage_fn.CloudEvent[storage_fn.StorageObjectData]):
      """it's triggered when a  folder or file is deleted in storage"""
      print(" Cloud Function Triggered: folder_deleted")
      object_data = event.data
      bucket_name=object_data.bucket
+     full_path = object_data.name  # "project001/subfolder/file.txt"
+     folder_path = full_path.split('/')[0]  # project001
      # every bucket=gitrepository
      #if repository with bucket doesn't exist it creates one
      repository.create_new_repo(bucket_name)
      print(f"Bucket: {bucket_name}")
-     folder_name = object_data.name
-     print(f"{folder_name} was deleted in {bucket_name}")
-     repository.delete_subdirectory(bucket_name,folder_name)
+
+     print(f"{full_path} was deleted in {bucket_name}")
+     #foldername to delete
+     repository.delete_file(full_path, folder_path)
+     print(f"{full_path} deleted successfully.")
