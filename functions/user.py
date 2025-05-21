@@ -17,5 +17,4 @@ class User:
         self.user_url = f"https://github.com/{self.username}/"
         self.user_dir = f"{self.username}_workspace"
 
-        os.makedirs(self.user_dir, exist_ok=True)
 

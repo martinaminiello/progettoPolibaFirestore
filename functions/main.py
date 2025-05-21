@@ -26,6 +26,13 @@ u = User(token)
 repository = Repository(u)
 db = firestore.client()
 
+
+
+
+
+
+
+
 #repo_name
 doc_ref = db.collection("documents").document("001")
 doc = doc_ref.get()
@@ -35,20 +42,22 @@ if doc.exists:
     title=title.replace(" ", "-")
     print(f"Title from parent doc: {title}")
 else:
-    raise Exception("Title not found")
+    print("Title not found!!")
 
 
 @firestore_fn.on_document_updated(document="documents/{docId}")
-def project_created(event: firestore_fn.Event) -> None:
+def project_updated(event: firestore_fn.Event) -> None:
     print("On project renominated triggered")
     object_data = event.data.to_dict()
     old_title=object_data.before.get("title")
     title=object_data.after.get("title")
     repository.rename_repo(title, old_title)
 
-@firestore_fn.on_document_updated(document="documents/{docId}")
-def project_updated(event: firestore_fn.Event) -> None:
+@firestore_fn.on_document_created(document="documents/{docId}")
+def project_created(event: firestore_fn.Event) -> None:
     print("On project created triggered")
+    object_data = event.data.to_dict()
+    title=object_data.get("title")
     repository.create_new_repo(title)
 
 @firestore_fn.on_document_created(document="documents/{docId}/001/{subDocId}")

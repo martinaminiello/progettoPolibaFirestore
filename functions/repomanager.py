@@ -13,9 +13,7 @@ class Repository:
 
     def get_current_repo(self, repo_name):
         username = self.user.username
-        repo_path=os.path.join(username,repo_name)
-        print(f"getcurrentrepo {repo_path}")
-        repo = self.user.github.get_repo(os.path.join(username,repo_name))
+        repo = self.user.github.get_repo(f"{username}/{repo_name}") # no os.path.join, github needs '/'
         print(f"Repo object retrieved from github: {repo}")
         return repo
 
@@ -26,10 +24,10 @@ class Repository:
         print(f"Repository renominated as: {new_name}")
 
 
-    def create_new_repo(self, bucket):
+    def create_new_repo(self, repo_name):
         try:
             # create repository on git
-            repo = self.user.github.get_user().create_repo(name=bucket)
+            repo = self.user.github.get_user().create_repo(name=repo_name)
         except GithubException as e:
             print(f"Status: {e.status}, Error: ", e)
             if e.status == 422:
