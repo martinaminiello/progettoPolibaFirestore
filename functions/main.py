@@ -1,20 +1,20 @@
 # The Cloud Functions for Firebase SDK to create Cloud Functions and set up triggers.
+import json
 import os
-
+from datetime import datetime
+import firebase_admin
 from google.cloud import storage
-
 from repomanager import Repository
 from user import User
-
-from firebase_admin import initialize_app, firestore
-from firebase_functions import storage_fn
+from firebase_admin import initialize_app, firestore, credentials
+from firebase_functions import storage_fn, firestore_fn
 from dotenv import load_dotenv
-
 from github import Github, Auth
 
+cred = credentials.Certificate("credentialsfirestore.json")
+firebase_admin.initialize_app(cred)
 
-app = initialize_app()
-
+#guthub authentication
 load_dotenv()
 token = os.getenv("GITHUB_TOKEN")
 if not token:
@@ -24,15 +24,80 @@ g = Github(auth=auth)
 print(f"User f{g.get_user().login}")
 u = User(token)
 repository = Repository(u)
+db = firestore.client()
+
+#repo_name
+doc_ref = db.collection("documents").document("001")
+doc = doc_ref.get()
+title=""
+if doc.exists:
+    title = doc.to_dict().get("title")
+    title=title.replace(" ", "-")
+    print(f"Title from parent doc: {title}")
+else:
+    raise Exception("Title not found")
+
+
+@firestore_fn.on_document_updated(document="documents/{docId}")
+def project_created(event: firestore_fn.Event) -> None:
+    print("On project renominated triggered")
+    object_data = event.data.to_dict()
+    old_title=object_data.before.get("title")
+    title=object_data.after.get("title")
+    repository.rename_repo(title, old_title)
+
+@firestore_fn.on_document_updated(document="documents/{docId}")
+def project_updated(event: firestore_fn.Event) -> None:
+    print("On project created triggered")
+    repository.create_new_repo(title)
+
+@firestore_fn.on_document_created(document="documents/{docId}/001/{subDocId}")
+def document_created(event: firestore_fn.Event) -> None:
+    print("On document created triggered")
+    object_data = event.data.to_dict()
+    path=object_data.get("name")
+    print(f"Name: {path}")
+    type=object_data.get("type")
+    print(f"Type: {type}")
+    repository.create_new_subdirectory(path, type, title)
+
+@firestore_fn.on_document_updated(document="documents/{docId}/001/{subDocId}")
+def document_updated(event: firestore_fn.Event)-> None:
+    print("On document updated triggered")
+    object_data_new = event.data.after.to_dict()
+    object_data_old= event.data.before.to_dict()
+    print(object_data_new)
+    old_path=object_data_old.get("name")
+    new_path=object_data_new.get("name")
+    print(f"old: {old_path}, new: {new_path}")
+    repository.update_file(old_path,new_path,title)
+
+@firestore_fn.on_document_deleted(document="documents/{docId}/001/{subDocId}")
+def document_deleted(event: firestore_fn.Event)-> None:
+    print("On document deleted triggered")
+
+    if event.data:
+        object_data = event.data.to_dict()
+        type=object_data.get("type")
+        print(f"Deleted: {object_data}")
+        repository.delete_file( object_data, type,title)
+    else:
+        print("Deleted document data not available (event.data is None)")
 
 
 
-#we should know which latex project the user decides to open
+
+
+
+
+
+
+"""
 bucket="cloudfunctionspoliba.firebasestorage.app"
 
 @storage_fn.on_object_finalized(bucket=bucket)
 def folder_created(event: storage_fn.CloudEvent[storage_fn.StorageObjectData]):
-     """it's triggered when a new folder is created in storage or a new file is uploaded"""
+    
      print(" Cloud Function Triggered: folder_created")
      object_data = event.data
      bucket_name=object_data.bucket
@@ -51,8 +116,7 @@ def folder_created(event: storage_fn.CloudEvent[storage_fn.StorageObjectData]):
 
 @storage_fn.on_object_deleted(bucket=bucket)
 def folder_deleted(event: storage_fn.CloudEvent[storage_fn.StorageObjectData]):
-     """it's triggered when a  folder or file is deleted in storage"""
-     print(" Cloud Function Triggered: folder_deleted")
+  
      object_data = event.data
      bucket_name=object_data.bucket
      full_path = object_data.name  # "project001/subfolder/file.txt"
@@ -66,3 +130,7 @@ def folder_deleted(event: storage_fn.CloudEvent[storage_fn.StorageObjectData]):
      #foldername to delete
      repository.delete_file(full_path, folder_path)
      print(f"{full_path} deleted successfully.")
+     
+     
+"""
+

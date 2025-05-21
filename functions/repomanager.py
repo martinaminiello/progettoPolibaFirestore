@@ -1,24 +1,7 @@
 import os
-
-import requests
-from firebase_admin import storage
+from pathlib import PurePosixPath
 from github import GithubException
-import base64
-import utils
 
-import time
-
-def retry_with_backoff(func, retries=3, delay=5, backoff=2):
-    for attempt in range(retries):
-        try:
-            return func()
-        except Exception as e:
-            print(f"Attempt {attempt+1} failed: {e}")
-            if attempt < retries - 1:
-                time.sleep(delay)
-                delay *= backoff
-            else:
-                raise
 
 
 class Repository:
@@ -28,58 +11,19 @@ class Repository:
 
 
 
-    def get_repo_path_from_name(self, name): #builds path from name
-        path=self.user.user_dir + '/' + name
-        return path
-
-      #it's necessary to use github api here instead of PyGithub since it doesn't encode binary files
-    def upload_binary_file(self, bucket_name, file, content_bytes, commit_msg):
-        url = f"https://api.github.com/repos/{self.user.username}/{bucket_name}/contents/{file}"
-
-        content_b64 = base64.b64encode(content_bytes).decode("utf-8")
-
-        headers = {
-            "Authorization": f"Bearer {self.user.token}",
-            "Accept": "application/vnd.github+json"
-        }
-
-        data = {
-            "message": commit_msg,
-            "content": content_b64,
-            "branch": "main"
-        }
-
-        response = requests.put(url, headers=headers, json=data)
-
-        if response.status_code == 201:
-            print(f"File '{file}' created.")
-        else:
-            print(f"Error: {response.status_code}")
-            print(response.text)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    def get_current_repo(self, projectfolder): #gets last repo object of current user
+    def get_current_repo(self, repo_name):
         username = self.user.username
-        repo_path=os.path.join(username,projectfolder)
+        repo_path=os.path.join(username,repo_name)
         print(f"getcurrentrepo {repo_path}")
-        repo = self.user.github.get_repo(username + '/' + projectfolder)
+        repo = self.user.github.get_repo(os.path.join(username,repo_name))
         print(f"Repo object retrieved from github: {repo}")
         return repo
 
 
-
+    def rename_repo(self, new_name, old_name):
+        repo=self.get_current_repo(old_name)
+        repo.edit(name=new_name)
+        print(f"Repository renominated as: {new_name}")
 
 
     def create_new_repo(self, bucket):
@@ -92,49 +36,114 @@ class Repository:
                 print(f"Repository already exists! No need to create another one")
                 return
 
-    def create_new_subdirectory(self, object_path, project_folder):
-        print(f"Repo: {project_folder}")
-        print(f"Object path: {object_path}")
-        repo = self.get_current_repo(project_folder)
+    def create_new_subdirectory(self, path, type, repo_name):
+        print(f"Repo name: {repo_name}")
+        print(f"Object path: {path}")
+        print(f"Type: {type}")
+        repo = self.get_current_repo(repo_name)
+
+        path_obj = PurePosixPath(path) #manages both \ and /
+
+        if type == "file":
+            folder_path = path_obj.parent  #removes file.ext
+            created_folder = PurePosixPath()
 
 
-        file_ext = [".png", ".jpeg", ".jpg", ".pdf"]
-        bucket = storage.bucket()  # usa il bucket di default
-        blob = bucket.blob(object_path)
+            for part in folder_path.parts:
+                created_folder = created_folder / part
+                repo.create_file(
+                    str(created_folder / ".gitignore"),
+                    f"Created folder at {created_folder}",
+                    ""
+                )
 
-        try:
-            if "." in object_path:  # è un file
-                if any(object_path.lower().endswith(ext) for ext in file_ext):
-                    content_bytes = blob.download_as_bytes()
-                    retry_with_backoff(lambda: self.upload_binary_file(
-                        project_folder, object_path, content_bytes, f"Added image {object_path}"
-                    ))
-                    print(f"Binary file {object_path} uploaded to GitHub")
-                else:
-                    content = blob.download_as_text()
-                    retry_with_backoff(lambda: repo.create_file(
-                        object_path, f"Created {object_path}", content
-                    ))
-                    print(f"Text file {object_path} created on GitHub")
-            else:
-                # Creazione di una directory "vuota" = placeholder .gitignore
-                retry_with_backoff(lambda: repo.create_file(
-                    os.path.join(object_path, ".gitignore"), f"Created folder {object_path}", ""
-                ))
-                print(f"Folder {object_path} created on GitHub")
+            try:
+                repo.create_file(str(path_obj), f"Created file at {path_obj}", "")
+                print(f"File {path_obj} created on GitHub")
+            except Exception as e:
+                print("Error creating file:", e)
 
-        except GithubException as e:
-            print("GitHub exception:", e)
-        except Exception as e:
-            print("Error during upload or download:", e)
+        elif type=="dir":
 
-    def delete_file(self, file_path,folder_name):
-        repo = self.get_current_repo(folder_name)
+            created_folder = PurePosixPath()
+            try:
+                for part in path_obj.parts:
+                    created_folder = created_folder / part
+                    repo.create_file(
+                        str(created_folder / ".gitignore"),
+                        f"Created folder at {created_folder}",
+                        ""
+                    )
+                print(f"Folder structure {path_obj} created on GitHub")
+            except Exception as e:
+                print("Error creating folders:", e)
+        else:
+            print(f"Type is null: {type}")
+
+
+
+
+    def delete_file(self, type, file_path,repo_name):
+        repo = self.get_current_repo(repo_name)
         contents = repo.get_contents(file_path)
         try:
-         repo.delete_file(contents.path, f"removed {file_path}", contents.sha)
+            if type=="file":
+             repo.delete_file(file_path, f"removed {file_path}", contents.sha)
+            elif type=="dir":
+               folder_content=self.list_all_files_in_folder(repo, file_path)
+               for file in folder_content:
+                   print(f"Deleting {file}")
+                   contents=repo.get_contents(file_path)
+                   repo.delete_file(file, f"removed {file}", contents.sha)
+
         except GithubException as e:
             print("GitHub exception:", e)
+
+
+
+
+    def list_all_files_in_folder(self,repo, folder_path):
+
+        all_files = []
+
+        try:
+            contents = repo.get_contents(folder_path)
+        except Exception as e:
+            print(f"Error recovering folder contents {folder_path}: {e}")
+            return all_files
+
+        for content in contents:
+            if content.type == "file":
+                all_files.append(content.path)
+            elif content.type == "dir":
+                # ricorsion subfolders
+                all_files.extend(self.list_all_files_in_folder(repo, content.path))
+
+        return all_files
+
+
+
+    def update_file(self, old_path, new_path, repo_name):
+        repo = self.get_current_repo(repo_name)
+
+        try:
+            contents = repo.get_contents(os.path.join(old_path))
+            print(f"Old path{old_path} ")
+            print(f"content.sha {contents.sha} deleted")
+            repo.delete_file(old_path,f"removed {old_path}", contents.sha)
+            print(f"{old_path} deleted")
+            repo.create_file(new_path,f"updated {old_path} with new path: {new_path}", "")
+        except GithubException as e:
+            print("GitHub exception:", e)
+
+
+
+
+
+
+
+
+
 
 
 

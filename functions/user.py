@@ -19,9 +19,3 @@ class User:
 
         os.makedirs(self.user_dir, exist_ok=True)
 
-
-    def get_git_remote_url(self, repo_path, repo_name):
-        url = f"https://{self.username}:{self.token}@github.com/{self.username}/{repo_name}.git"
-        subprocess.run(["git", "remote", "set-url", "origin", url], cwd=repo_path, check=True)
-        return url
-
