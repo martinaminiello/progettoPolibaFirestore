@@ -29,7 +29,7 @@ db = firestore.client()
 def project_created(event: firestore_fn.Event) -> None:
     print("On project created triggered")
     object_data = event.data.to_dict()
-    title=object_data.get("title")
+    title=object_data.get("title").replace(" ", "-")
     repository.create_new_repo(title)
     tree = object_data.get("tree")
     if not tree:
@@ -48,9 +48,9 @@ def project_updated(event: firestore_fn.Event) -> None:
         old_data = object_data.before.to_dict()
         new_data = object_data.after.to_dict()
 
-        old_title = old_data.get("title")
-        title = new_data.get("title")
-        if new_data != old_title:
+        old_title = old_data.get("title").replace(" ", "-")
+        title = new_data.get("title").replace(" ", "-")
+        if title != old_title:
             repository.rename_repo(title, old_title)
 
         object_data_new = event.data.after.to_dict()
