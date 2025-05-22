@@ -1,5 +1,4 @@
 import os
-from pathlib import PurePosixPath
 from github import GithubException
 
 
@@ -34,105 +33,96 @@ class Repository:
                 print(f"Repository already exists! No need to create another one")
                 return
 
-    def create_new_subdirectory(self, path, type, repo_name):
+    def extract_file_paths(self,tree_map, current_path=""):
+        paths = []
+
+        if not isinstance(tree_map, dict):
+            print("Tree map is not a dictionary.")
+            return paths
+
+        for key, value in tree_map.items():
+            new_path = f"{current_path}/{key}" if current_path else key
+            if isinstance(value, dict):
+                #if value is a another map (another folder) does recursion
+                paths.extend(self.extract_file_paths(value, new_path))
+            elif isinstance(value, str):
+                 paths.append(new_path)
+        return paths
+
+    def get_file_content(self,tree_map, file_path):
+        keys = file_path.split('/')
+        current = tree_map
+        for key in keys:
+            if isinstance(current, dict) and key in current:
+                current = current[key]
+            else:
+                return None
+        return current if isinstance(current, str) else None
+
+    def create_tree(self, file_paths, tree, repo_name):
         print(f"Repo name: {repo_name}")
-        print(f"Object path: {path}")
-        print(f"Type: {type}")
         repo = self.get_current_repo(repo_name)
 
-        path_obj = PurePosixPath(path) #manages both \ and /
+        for path in file_paths:
+            content = self.get_file_content(tree, path)
 
-        if type == "file":
-            folder_path = path_obj.parent  #removes file.ext
-            created_folder = PurePosixPath()
+            if content is not None:
+                try:
+                    repo.create_file(path, f"Add file {path}", content)
+                    print(f"File created at {path}")
+                except GithubException as e:
+                    if e.status == 422:
+                        print(f"File already exists: {path}")
+                    else:
+                        print(f"Error creating new file: {path}: {e}")
 
+    def update_tree(self, old_tree, new_tree, repo_name):
+        repo = self.get_current_repo(repo_name)
 
-            for part in folder_path.parts:
-                created_folder = created_folder / part
-                repo.create_file(
-                    str(created_folder / ".gitignore"),
-                    f"Created folder at {created_folder}",
-                    ""
-                )
+        old_paths = set(self.extract_file_paths(old_tree))
+        new_paths = set(self.extract_file_paths(new_tree))
 
+        # deleted file
+        deleted = old_paths - new_paths
+        for path in deleted:
             try:
-                repo.create_file(str(path_obj), f"Created file at {path_obj}", "")
-                print(f"File {path_obj} created on GitHub")
-            except Exception as e:
-                print("Error creating file:", e)
+                file = repo.get_contents(path)
+                repo.delete_file(file.path, f"Remove {path}", file.sha)
+                print(f"Deleted: {path}")
+            except GithubException as e:
+                print(f"Error deleting {path}: {e}")
 
-        elif type=="dir":
-
-            created_folder = PurePosixPath()
+        # added files
+        added = new_paths - old_paths
+        for path in added:
+            content = self.get_file_content(new_tree, path) or ""
             try:
-                for part in path_obj.parts:
-                    created_folder = created_folder / part
-                    repo.create_file(
-                        str(created_folder / ".gitignore"),
-                        f"Created folder at {created_folder}",
-                        ""
+                repo.create_file(path, f"Add {path}", content)
+                print(f"Added: {path}")
+            except GithubException as e:
+                if e.status == 422:
+                    print(f"Already exists (skipped): {path}")
+                else:
+                    print(f"Error creating {path}: {e}")
+
+        # content modified
+        common = old_paths & new_paths
+        for path in common:
+            old_content = self.get_file_content(old_tree, path) or ""
+            new_content = self.get_file_content(new_tree, path) or ""
+            if old_content != new_content:
+                try:
+                    contents = repo.get_contents(path)
+                    repo.update_file(
+                        contents.path,
+                        f"Updated content of {path}",
+                        new_content,
+                        contents.sha
                     )
-                print(f"Folder structure {path_obj} created on GitHub")
-            except Exception as e:
-                print("Error creating folders:", e)
-        else:
-            print(f"Type is null: {type}")
+                    print(f"Updated: {path}")
+                except GithubException as e:
+                    print(f"Error updating {path}: {e}")
 
-
-
-
-    def delete_file(self, type, file_path,repo_name):
-        repo = self.get_current_repo(repo_name)
-        contents = repo.get_contents(file_path)
-        try:
-            if type=="file":
-             repo.delete_file(file_path, f"removed {file_path}", contents.sha)
-            elif type=="dir":
-               folder_content=self.list_all_files_in_folder(repo, file_path)
-               for file in folder_content:
-                   print(f"Deleting {file}")
-                   contents=repo.get_contents(file_path)
-                   repo.delete_file(file, f"removed {file}", contents.sha)
-
-        except GithubException as e:
-            print("GitHub exception:", e)
-
-
-
-
-    def list_all_files_in_folder(self,repo, folder_path):
-
-        all_files = []
-
-        try:
-            contents = repo.get_contents(folder_path)
-        except Exception as e:
-            print(f"Error recovering folder contents {folder_path}: {e}")
-            return all_files
-
-        for content in contents:
-            if content.type == "file":
-                all_files.append(content.path)
-            elif content.type == "dir":
-                # ricorsion subfolders
-                all_files.extend(self.list_all_files_in_folder(repo, content.path))
-
-        return all_files
-
-
-
-    def update_file(self, old_path, new_path, repo_name):
-        repo = self.get_current_repo(repo_name)
-
-        try:
-            contents = repo.get_contents(os.path.join(old_path))
-            print(f"Old path{old_path} ")
-            print(f"content.sha {contents.sha} deleted")
-            repo.delete_file(old_path,f"removed {old_path}", contents.sha)
-            print(f"{old_path} deleted")
-            repo.create_file(new_path,f"updated {old_path} with new path: {new_path}", "")
-        except GithubException as e:
-            print("GitHub exception:", e)
 
 
 
