@@ -4,16 +4,16 @@ import firebase_admin
 from repomanager import Repository
 from user import User
 from firebase_admin import initialize_app, firestore, credentials
-from firebase_functions import storage_fn, firestore_fn
+from firebase_functions import firestore_fn
 from dotenv import load_dotenv
 from github import Github, Auth
-import populate_firestore
+import uuid
 cred = credentials.Certificate("credentialsfirestore.json")
 firebase_admin.initialize_app(cred)
 
-#guthub authentication
+#github authentication
 load_dotenv()
-token = os.getenv("GITHUB_TOKEN")
+token = os.getenv("GITHUB_TOKEN") #github token in file .env
 if not token:
      raise Exception("Token not found!")
 auth = Auth.Token(token)
@@ -28,37 +28,46 @@ db = firestore.client()
 @firestore_fn.on_document_created(document="documents/{docId}")
 def project_created(event: firestore_fn.Event) -> None:
     print("On project created triggered")
+    myuuid = str(uuid.uuid4())
     object_data = event.data.to_dict()
-    title=object_data.get("title").replace(" ", "-")
-    repository.create_new_repo(title)
-    tree = object_data.get("tree")
+    repository.create_new_repo(myuuid) #repo name is a unique id
+
+    doc_id = event.params["docId"]
+    db.collection("documents").document(doc_id).update({
+        "repo_uuid": myuuid })  #uuid is memorized in firestore
+
+    tree = object_data.get("tree") #retrieves tree from object event
     if not tree:
-        print("No 'tree' found in document.")
+        print("No 'tree' found in document.") #user creates project for the first time (so it's empty)
         return
 
-    file_paths = repository.extract_file_paths(tree)
+    file_paths = repository.extract_file_paths(tree) #build all files paths from the tree
     for path in file_paths:
         print(f" {path}")
-    repository.create_tree(file_paths, tree, title)
+    repository.create_tree(file_paths, tree, myuuid)
 
 @firestore_fn.on_document_updated(document="documents/{docId}")
 def project_updated(event: firestore_fn.Event) -> None:
-        print("On project renominated triggered")
-        object_data = event.data
-        old_data = object_data.before.to_dict()
-        new_data = object_data.after.to_dict()
-
-        old_title = old_data.get("title").replace(" ", "-")
-        title = new_data.get("title").replace(" ", "-")
-        if title != old_title:
-            repository.rename_repo(title, old_title)
+        print("On project updated triggered")
 
         object_data_new = event.data.after.to_dict()
         object_data_old = event.data.before.to_dict()
         old_path = object_data_old.get("tree")
         new_path = object_data_new.get("tree")
-        if old_path != new_path:
-            repository.update_tree(old_path, new_path, title)
+
+        my_uuid = event.data.after.to_dict().get("repo_uuid") #retrieves uuid so it knows which repository must be updated
+        if not my_uuid:
+            print("repo_uuid non found.")
+            return
+
+        if (old_path is None and new_path) or (old_path != new_path): # so if old tree is null () (user creates empty project)
+            repository.update_tree(old_path,new_path,my_uuid )        # it still works
+
+@firestore_fn.on_document_deleted(document="documents/{docId}")
+def project_deleted(event: firestore_fn.Event) -> None:
+        print("On project deleted triggered")
+        my_uuid = event.data.to_dict().get("repo_uuid")
+        repository.delete_project(my_uuid)
 
 
 
