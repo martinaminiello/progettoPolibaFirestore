@@ -16,6 +16,10 @@ class Repository:
         print(f"Repo object retrieved from github: {repo}")
         return repo
 
+    def get_repo_url(self, repo_name):
+        url=self.user.user_url+repo_name
+        return url
+
 
 
     def create_new_repo(self, repo_name):
