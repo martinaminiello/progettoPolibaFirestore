@@ -1,40 +1,38 @@
 # The Cloud Functions for Firebase SDK to create Cloud Functions and set up triggers.
-import os
 import firebase_admin
 from repomanager import Repository
 from user import User
 from firebase_admin import initialize_app, firestore, credentials
 from firebase_functions import firestore_fn
-from dotenv import load_dotenv
 from github import Github, Auth
 import uuid
-from firebase_functions import https_fn
 
 
-cred = credentials.Certificate("credentialsfirestore.json")
-firebase_admin.initialize_app(cred)
-#github authentication
-load_dotenv()
-token = os.getenv("GITHUB_TOKEN") #github token in file .env
-if not token:
-     raise Exception("Token not found!")
-auth = Auth.Token(token)
-g = Github(auth=auth)
-print(f"User f{g.get_user().login}")
-u = User(token)
-repository = Repository(u)
-db = firestore.client()
+if not firebase_admin._apps:
+    firebase_admin.initialize_app()
 
-Collection_name="prova"
-# remember to also change the path in cloud functions parameter(document="prova/{docId}")
+# nothing can be initialized outside the cloud functions, not even tokens, repositories
+# everything must be inside the cloud functions or deploy will fail!
+# that's the reason you will see repetitive code inside the cloud functions
 
-
-
+# With deployed cloud functions is not possible to load the token from an .env file
+#TOKEN CANNOT BE SHARED HERE (not even in comments) OR GITHUB WILL INTERCEPT IT AND DEACTIVATE IT!!!
 
 
 @firestore_fn.on_document_created(document="prova/{docId}")
 def project_created(event: firestore_fn.Event) -> None:
     print("On project created triggered")
+    db = firestore.client()
+    Collection_name = "prova"
+    # remember to also change the path in cloud functions parameter(document="prova/{docId}"
+    # github authentication
+    token = "token"
+    auth = Auth.Token(token)
+    g = Github(auth=auth)
+    print(f"User f{g.get_user().login}")
+    u = User(token)
+    repository = Repository(u)
+
     doc_id = event.params["docId"]
     doc_ref = db.collection(Collection_name).document(doc_id)
     doc_snapshot = doc_ref.get()
@@ -67,6 +65,14 @@ def project_created(event: firestore_fn.Event) -> None:
 def project_updated(event: firestore_fn.Event) -> None:
         print("On project updated triggered")
 
+        # github authentication
+        token = "token"
+        auth = Auth.Token(token)
+        g = Github(auth=auth)
+        print(f"User f{g.get_user().login}")
+        u = User(token)
+        repository = Repository(u)
+
         object_data_new = event.data.after.to_dict()
         object_data_old = event.data.before.to_dict()
         old_path = object_data_old.get("tree")
@@ -82,8 +88,19 @@ def project_updated(event: firestore_fn.Event) -> None:
 
 @firestore_fn.on_document_deleted(document="prova/{docId}")
 def project_deleted(event: firestore_fn.Event) -> None:
+
         print("On project deleted triggered")
+
+        # github authentication
+        token = "token"
+        auth = Auth.Token(token)
+        g = Github(auth=auth)
+        print(f"User f{g.get_user().login}")
+        u = User(token)
+        repository = Repository(u)
+
         my_uuid = event.data.to_dict().get("repo_uuid")
+
         repository.delete_project(my_uuid)
 
 
