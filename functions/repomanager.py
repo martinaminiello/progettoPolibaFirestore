@@ -1,6 +1,6 @@
 import os
 from github import GithubException
-
+from google.cloud.exceptions import GoogleCloudError
 
 
 class Repository:
@@ -78,7 +78,7 @@ class Repository:
                     else:
                         print(f"Error creating new file: {path}: {e}")
 
-    def update_tree(self, old_tree, new_tree, repo_name):
+    def update_tree(self, old_tree, new_tree, repo_name,doc_ref):
         repo = self.get_current_repo(repo_name)
 
         #I turn paths in sets, so I can use set operations (union, difference..)
@@ -92,6 +92,17 @@ class Repository:
                 file = repo.get_contents(path)
                 repo.delete_file(file.path, f"Remove {path}", file.sha)
                 print(f"Deleted: {path}")
+                doc_snapshot = doc_ref.get()
+                data = doc_snapshot.to_dict() or {}
+                last_modified = data.get("last_modified", {})
+                # if deleted path was in last modified the deleted path is replaced by ""
+                if path in last_modified:
+                    try:
+                        doc_ref.update({
+                            "last_modified": {""}
+                        })
+                    except GoogleCloudError as e:
+                        print(f"Firestore update failed: {e}")
             except GithubException as e:
                 print(f"Error deleting {path}: {e}")
 
@@ -102,6 +113,19 @@ class Repository:
             try:
                 repo.create_file(path, f"Add {path}", content)
                 print(f"Added: {path}")
+                commit = repo.get_commits(path=path)[0]
+                timestamp = commit.commit.author.date
+
+                try: #adds path and timestamp of the last modified file
+                    doc_ref.update({
+                    "last_modified": {path: timestamp}
+                    })
+                except GoogleCloudError as e:
+                    print(f"Firestore update failed: {e}")
+
+                print(f"Added: {path} at {timestamp}")
+
+
             except GithubException as e:
                 if e.status == 422:
                     print(f"Already exists (skipped): {path}")
@@ -122,7 +146,15 @@ class Repository:
                         new_content,
                         contents.sha
                     )
-                    print(f"Updated: {path}")
+                    commit = repo.get_commits(path=path)[0]
+                    timestamp = commit.commit.author.date
+                    try: #adds path and timestamp of the last modified file
+                        doc_ref.update({
+                            "last_modified": {path: timestamp}
+                        })
+                    except GoogleCloudError as e:
+                        print(f"Firestore update failed: {e}")
+                    print(f"Updated: {path} at {timestamp}")
                 except GithubException as e:
                     print(f"Error updating {path}: {e}")
 

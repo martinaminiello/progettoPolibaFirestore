@@ -19,12 +19,12 @@ if not firebase_admin._apps:
 #TOKEN CANNOT BE SHARED HERE (not even in comments) OR GITHUB WILL INTERCEPT IT AND DEACTIVATE IT!!!
 
 
-@firestore_fn.on_document_created(document="prova/{docId}")
+@firestore_fn.on_document_created(document="current_projects/{docId}")
 def project_created(event: firestore_fn.Event) -> None:
     print("On project created triggered")
     db = firestore.client()
-    Collection_name = "prova"
-    # remember to also change the path in cloud functions parameter(document="prova/{docId}"
+    Collection_name = "current_projects"
+    # remember to also change the path in cloud functions parameter(document="current_projects/{docId}"
     # github authentication
     token = "token"
     auth = Auth.Token(token)
@@ -61,7 +61,7 @@ def project_created(event: firestore_fn.Event) -> None:
         repository.create_tree(file_paths, tree, myuuid)
 
 
-@firestore_fn.on_document_updated(document="prova/{docId}")
+@firestore_fn.on_document_updated(document="current_projects/{docId}")
 def project_updated(event: firestore_fn.Event) -> None:
         print("On project updated triggered")
 
@@ -73,6 +73,10 @@ def project_updated(event: firestore_fn.Event) -> None:
         u = User(token)
         repository = Repository(u)
 
+        db = firestore.client()
+        Collection_name = "current_projects"
+        doc_id = event.params["docId"]
+        doc_ref = db.collection(Collection_name).document(doc_id)
 
 
         object_data_new = event.data.after.to_dict()
@@ -92,6 +96,6 @@ def project_updated(event: firestore_fn.Event) -> None:
         else:
 
             if (old_path is None and new_path) or (old_path != new_path): # so if old tree is null () (user creates empty project)
-             repository.update_tree(old_path,new_path,my_uuid )        # it still works
+             repository.update_tree(old_path,new_path,my_uuid, doc_ref )        # it still works
 
 
