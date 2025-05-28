@@ -19,7 +19,7 @@ if not firebase_admin._apps:
 #TOKEN CANNOT BE SHARED HERE (not even in comments) OR GITHUB WILL INTERCEPT IT AND DEACTIVATE IT!!!
 
 
-@firestore_fn.on_document_created(document="current_projects/{docId}")
+@firestore_fn.on_document_created(document="projects/{docId}")
 def project_created(event: firestore_fn.Event) -> None:
     print("On project created triggered")
     db = firestore.client()
@@ -61,7 +61,7 @@ def project_created(event: firestore_fn.Event) -> None:
         repository.create_tree(file_paths, tree, myuuid)
 
 
-@firestore_fn.on_document_updated(document="current_projects/{docId}")
+@firestore_fn.on_document_updated(document="projects/{docId}")
 def project_updated(event: firestore_fn.Event) -> None:
         print("On project updated triggered")
 
@@ -90,12 +90,25 @@ def project_updated(event: firestore_fn.Event) -> None:
             print("repo_uuid not found.")
             return
 
-        deleted = object_data_new.get("deleted")
-        if deleted:
-            repository.delete_project(my_uuid)
-        else:
-
-            if (old_path is None and new_path) or (old_path != new_path): # so if old tree is null () (user creates empty project)
-             repository.update_tree(old_path,new_path,my_uuid, doc_ref )        # it still works
 
 
+        if (old_path is None and new_path) or (old_path != new_path): # so if old tree is null () (user creates empty project)
+         repository.update_tree(old_path,new_path,my_uuid, doc_ref )        # it still works
+
+
+@firestore_fn.on_document_deleted(document="projects/{docId}")
+def project_deleted(event: firestore_fn.Event) -> None:
+
+        print("On project deleted triggered")
+
+        # github authentication
+        token = "token"
+        auth = Auth.Token(token)
+        g = Github(auth=auth)
+        print(f"User f{g.get_user().login}")
+        u = User(token)
+        repository = Repository(u)
+
+        my_uuid = event.data.to_dict().get("repo_uuid")
+
+        repository.delete_project(my_uuid)
