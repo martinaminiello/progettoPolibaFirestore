@@ -83,7 +83,7 @@ def project_updated(event: firestore_fn.Event) -> None:
 
         my_uuid = event.data.after.to_dict().get("repo_uuid") #retrieves uuid so it knows which repository must be updated
         if not my_uuid:
-            print("repo_uuid non found.")
+            print("repo_uuid not found.")
             return
 
         deleted = object_data_new.get("deleted")
@@ -95,26 +95,3 @@ def project_updated(event: firestore_fn.Event) -> None:
              repository.update_tree(old_path,new_path,my_uuid )        # it still works
 
 
-
-"""
-@firestore_fn.on_document_deleted(document="prova/{docId}")
-def project_deleted(event: firestore_fn.Event) -> None:
-
-        print("On project deleted triggered")
-
-        # github authentication
-        token = "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"
-        auth = Auth.Token(token)
-        g = Github(auth=auth)
-        print(f"User f{g.get_user().login}")
-        u = User(token)
-        repository = Repository(u)
-
-        my_uuid = event.data.to_dict().get("repo_uuid")
-
-        repository.delete_project(my_uuid)
-
-
-
-
-"""
