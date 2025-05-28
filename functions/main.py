@@ -26,7 +26,7 @@ def project_created(event: firestore_fn.Event) -> None:
     Collection_name = "prova"
     # remember to also change the path in cloud functions parameter(document="prova/{docId}"
     # github authentication
-    token = "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"
+    token = "token"
     auth = Auth.Token(token)
     g = Github(auth=auth)
     print(f"User {g.get_user().login}")
@@ -66,7 +66,7 @@ def project_updated(event: firestore_fn.Event) -> None:
         print("On project updated triggered")
 
         # github authentication
-        token = "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"
+        token = "token"
         auth = Auth.Token(token)
         g = Github(auth=auth)
         print(f"User f{g.get_user().login}")
