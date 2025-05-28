@@ -26,10 +26,10 @@ def project_created(event: firestore_fn.Event) -> None:
     Collection_name = "prova"
     # remember to also change the path in cloud functions parameter(document="prova/{docId}"
     # github authentication
-    token = "token"
+    token = "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"
     auth = Auth.Token(token)
     g = Github(auth=auth)
-    print(f"User f{g.get_user().login}")
+    print(f"User {g.get_user().login}")
     u = User(token)
     repository = Repository(u)
 
@@ -38,8 +38,8 @@ def project_created(event: firestore_fn.Event) -> None:
     doc_snapshot = doc_ref.get()
     data = doc_snapshot.to_dict() or {}
     myuuid = data.get("repo_uuid")
-    if myuuid is not None:
-        print("Repository already exists!")
+    if myuuid:
+        print(f"Repository already exists! {myuuid}")
     else:
 
         myuuid = str(uuid.uuid4())
@@ -66,15 +66,18 @@ def project_updated(event: firestore_fn.Event) -> None:
         print("On project updated triggered")
 
         # github authentication
-        token = "token"
+        token = "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"
         auth = Auth.Token(token)
         g = Github(auth=auth)
         print(f"User f{g.get_user().login}")
         u = User(token)
         repository = Repository(u)
 
+
+
         object_data_new = event.data.after.to_dict()
         object_data_old = event.data.before.to_dict()
+
         old_path = object_data_old.get("tree")
         new_path = object_data_new.get("tree")
 
@@ -83,16 +86,24 @@ def project_updated(event: firestore_fn.Event) -> None:
             print("repo_uuid non found.")
             return
 
-        if (old_path is None and new_path) or (old_path != new_path): # so if old tree is null () (user creates empty project)
-            repository.update_tree(old_path,new_path,my_uuid )        # it still works
+        deleted = object_data_new.get("deleted")
+        if deleted:
+            repository.delete_project(my_uuid)
+        else:
 
+            if (old_path is None and new_path) or (old_path != new_path): # so if old tree is null () (user creates empty project)
+             repository.update_tree(old_path,new_path,my_uuid )        # it still works
+
+
+
+"""
 @firestore_fn.on_document_deleted(document="prova/{docId}")
 def project_deleted(event: firestore_fn.Event) -> None:
 
         print("On project deleted triggered")
 
         # github authentication
-        token = "token"
+        token = "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"
         auth = Auth.Token(token)
         g = Github(auth=auth)
         print(f"User f{g.get_user().login}")
@@ -106,3 +117,4 @@ def project_deleted(event: firestore_fn.Event) -> None:
 
 
 
+"""
