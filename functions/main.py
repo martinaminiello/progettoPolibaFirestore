@@ -26,7 +26,7 @@ def project_created(event: firestore_fn.Event) -> None:
     Collection_name = "projects"
     # remember to also change the path in cloud functions parameter(document="current_projects/{docId}"
     # github authentication
-    token = "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"
+    token = "token"
     auth = Auth.Token(token)
     g = Github(auth=auth)
     print(f"User {g.get_user().login}")
@@ -74,7 +74,7 @@ def project_updated(event: firestore_fn.Event) -> None:
         print("On project updated triggered")
 
         # github authentication
-        token = "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"
+        token = "token"
         auth = Auth.Token(token)
         g = Github(auth=auth)
         print(f"User f{g.get_user().login}")
@@ -110,7 +110,7 @@ def project_deleted(event: firestore_fn.Event) -> None:
         print("On project deleted triggered")
 
         # github authentication
-        token = "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"
+        token = "token"
         auth = Auth.Token(token)
         g = Github(auth=auth)
         print(f"User f{g.get_user().login}")
