@@ -1,6 +1,7 @@
 import os
 from github import GithubException
 from google.cloud.exceptions import GoogleCloudError
+from google.cloud.firestore_v1 import DELETE_FIELD
 
 
 class Repository:
@@ -96,10 +97,11 @@ class Repository:
                 data = doc_snapshot.to_dict() or {}
                 last_modified = data.get("last_modified", {})
                 # if deleted path was in last modified the deleted path is replaced by ""
-                if path in last_modified:
+                safe_path = path.replace("/", "-").replace(".", "_")
+                if safe_path in last_modified:
                     try:
                         doc_ref.update({
-                            "last_modified": {""}
+                            f"last_modified.{safe_path}": DELETE_FIELD
                         })
                     except GoogleCloudError as e:
                         print(f"Firestore update failed: {e}")
@@ -115,10 +117,15 @@ class Repository:
                 print(f"Added: {path}")
                 commit = repo.get_commits(path=path)[0]
                 timestamp = commit.commit.author.date
+                author = commit.commit.author.name #this is not commit author, but once realtime database is up, it will be the compile author
+                safe_path = path.replace("/", "-").replace(".","_") #Firestore interprets "/" and "." as keys
 
                 try: #adds path and timestamp of the last modified file
                     doc_ref.update({
-                    "last_modified": {path: timestamp}
+                        f"last_modified.{safe_path}": {
+                            "timestamp": timestamp,
+                            "author": author
+                        }
                     })
                 except GoogleCloudError as e:
                     print(f"Firestore update failed: {e}")
@@ -148,9 +155,14 @@ class Repository:
                     )
                     commit = repo.get_commits(path=path)[0]
                     timestamp = commit.commit.author.date
+                    safe_path = path.replace("/", "-").replace(".","_")
+                    author = commit.commit.author.name
                     try: #adds path and timestamp of the last modified file
                         doc_ref.update({
-                            "last_modified": {path: timestamp}
+                            f"last_modified.{safe_path}": {
+                                "timestamp": timestamp,
+                                "author": author
+                            }
                         })
                     except GoogleCloudError as e:
                         print(f"Firestore update failed: {e}")

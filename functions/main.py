@@ -7,7 +7,7 @@ from firebase_functions import firestore_fn
 from github import Github, Auth
 import  uuid
 
-
+import datetime
 if not firebase_admin._apps:
     firebase_admin.initialize_app()
 
@@ -23,10 +23,10 @@ if not firebase_admin._apps:
 def project_created(event: firestore_fn.Event) -> None:
     print("On project created triggered")
     db = firestore.client()
-    Collection_name = "current_projects"
+    Collection_name = "projects"
     # remember to also change the path in cloud functions parameter(document="current_projects/{docId}"
     # github authentication
-    token = "token"
+    token = "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"
     auth = Auth.Token(token)
     g = Github(auth=auth)
     print(f"User {g.get_user().login}")
@@ -45,11 +45,19 @@ def project_created(event: firestore_fn.Event) -> None:
         myuuid = str(uuid.uuid4())
         object_data = event.data.to_dict()
         repository.create_new_repo(myuuid) #repo name is a unique id
-        repo_url=repository.get_repo_url(myuuid)
+        repo_url=repository.get_repo_url(myuuid) #build repo url
+
         doc_id = event.params["docId"]
         db.collection(Collection_name).document(doc_id).update({
-            "repo_uuid": myuuid })  #uuid is memorized in firestore
-        db.collection(Collection_name).document(doc_id).update({"repo": repo_url})
+            "repo_uuid": myuuid })  #uuid is store in firestore
+
+        db.collection(Collection_name).document(doc_id).update({"repo": repo_url})# repo_url is stored in firestore
+
+        timestamp = datetime.datetime.now(datetime.timezone.utc)
+        db.collection(Collection_name).document(doc_id).update({
+            "creation-time": timestamp #creation date is stored in firestore
+        })
+
         tree = object_data.get("tree") #retrieves tree from object event
         if not tree:
             print("No 'tree' found in document.") #user creates project for the first time (so it's empty)
@@ -66,7 +74,7 @@ def project_updated(event: firestore_fn.Event) -> None:
         print("On project updated triggered")
 
         # github authentication
-        token = "token"
+        token = "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"
         auth = Auth.Token(token)
         g = Github(auth=auth)
         print(f"User f{g.get_user().login}")
@@ -74,7 +82,7 @@ def project_updated(event: firestore_fn.Event) -> None:
         repository = Repository(u)
 
         db = firestore.client()
-        Collection_name = "current_projects"
+        Collection_name = "projects"
         doc_id = event.params["docId"]
         doc_ref = db.collection(Collection_name).document(doc_id)
 
@@ -102,7 +110,7 @@ def project_deleted(event: firestore_fn.Event) -> None:
         print("On project deleted triggered")
 
         # github authentication
-        token = "token"
+        token = "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"
         auth = Auth.Token(token)
         g = Github(auth=auth)
         print(f"User f{g.get_user().login}")
