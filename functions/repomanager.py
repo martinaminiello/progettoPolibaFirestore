@@ -160,7 +160,7 @@ class Repository:
                     try: #adds path and timestamp of the last modified file
                         doc_ref.update({
                             f"last_modified.{safe_path}": {
-                                "timestamp": timestamp,
+                                "timestamp": timestamp, #time of the commit
                                 "author": author
                             }
                         })
@@ -178,6 +178,7 @@ class Repository:
             print(f"Repository {repo_name} deleted successfully")
         except GithubException as e:
             print(f"Error deleting {repo}: {e}")
+
 
 
 
