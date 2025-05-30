@@ -1,7 +1,10 @@
 import os
+import uuid
+import datetime
 from github import GithubException
 from google.cloud.exceptions import GoogleCloudError
 from google.cloud.firestore_v1 import DELETE_FIELD
+import utils
 
 
 class Repository:
@@ -34,7 +37,7 @@ class Repository:
                 return
 
 
-    def extract_file_paths(self,tree_map, current_path=""):
+    def extract_file_paths(self, tree_map, current_path=""):
         paths = []
 
         if not isinstance(tree_map, dict):
@@ -43,48 +46,56 @@ class Repository:
 
         for key, value in tree_map.items():
             new_path = f"{current_path}/{key}" if current_path else key
-            # builds path like this "current_path/key" if current path is not empty, otherwise just "key"
+            # If value is a dict and has 'content', treat as file, else recurse
             if isinstance(value, dict):
-                #if value is a another map (another folder) does recursion
-                paths.extend(self.extract_file_paths(value, new_path))
+                if "content" in value and "last-modifier" in value:
+                    paths.append(new_path)
+                else:
+                    paths.extend(self.extract_file_paths(value, new_path))
             elif isinstance(value, str): #if values is a string (just a file) adds it to paths
                  paths.append(new_path)
         return paths
 
+    
 
-    def get_file_content(self,tree_map, file_path):
-        keys = file_path.split('/')
-        current = tree_map
-        for key in keys:
-            if isinstance(current, dict) and key in current: #if key is in the tree
-                current = current[key] #retrieves content, for example current[main.tex]=content
-            else:
-                return None
-        return current if isinstance(current, str) else None
 
-    def create_tree(self, file_paths, tree, repo_name):
+    def create_tree(self, file_paths, repo_name, last_modified_info):
         print(f"Repo name: {repo_name}")
         repo = self.get_current_repo(repo_name)
 
+        # Ensure last_modified_info is always a dict
+        if last_modified_info is None:
+            last_modified_info = {}
+        print(f"Last modified info: {last_modified_info}")
+
         for path in file_paths:
-            content = self.get_file_content(tree, path)
+            print(f"Processing path: {path}")
+            last_modified_path = path.replace("/", "-").replace(".", "_")
+            file_info = last_modified_info.get(last_modified_path, {})
+            content = file_info.get("content", "")
+            author = file_info.get("last-modifier")
+            uuid_cache = file_info.get("uuid_cache")
+            print(f"Creating file at {path} with content: {repr(content)} e author: {author}")
+            try:
+                repo.create_file(path, f"Add file {path}, version: {uuid_cache}", content)
+                print(f"File created at {path} with content: {repr(content)}")
+             
+            except GithubException as e:
+                if e.status == 422:
+                    print(f"File already exists: {path}")
+                else:
+                    print(f"Error creating new file: {path}: {e}")
 
-            if content is not None:
-                try:
-                    repo.create_file(path, f"Add file {path}", content)
-                    print(f"File created at {path}")
-                except GithubException as e:
-                    if e.status == 422:
-                        print(f"File already exists: {path}")
-                    else:
-                        print(f"Error creating new file: {path}: {e}")
 
-    def update_tree(self, old_tree, new_tree, repo_name,doc_ref):
+    def update_tree(self, old_tree, new_tree, repo_name, doc_ref, old_last_modified_info):
         repo = self.get_current_repo(repo_name)
 
-        #I turn paths in sets, so I can use set operations (union, difference..)
         old_paths = set(self.extract_file_paths(old_tree))
         new_paths = set(self.extract_file_paths(new_tree))
+
+        # Usa split_tree per ottenere info file dal nuovo tree
+        new_tree_structure, file_info_dict = utils.split_tree(new_tree)
+        new_modified_dict = utils.insert_last_modified(file_info_dict)["last-modified"]
 
         # deleted file: files that are no longer in new paths
         deleted = old_paths - new_paths
@@ -92,92 +103,57 @@ class Repository:
             try:
                 file = repo.get_contents(path)
                 repo.delete_file(file.path, f"Remove {path}", file.sha)
+                doc_ref.update({f"tree.{path}": DELETE_FIELD})
+                doc_ref.update({f"last-modified.{path}": DELETE_FIELD})
                 print(f"Deleted: {path}")
-                doc_snapshot = doc_ref.get()
-                data = doc_snapshot.to_dict() or {}
-                last_modified = data.get("last_modified", {})
-                # if deleted path was in last modified the deleted path is replaced by ""
-                safe_path = path.replace("/", "-").replace(".", "_")
-                if safe_path in last_modified:
-                    try:
-                        doc_ref.update({
-                            f"last_modified.{safe_path}": DELETE_FIELD
-                        })
-                    except GoogleCloudError as e:
-                        print(f"Firestore update failed: {e}")
             except GithubException as e:
                 print(f"Error deleting {path}: {e}")
+            except GoogleCloudError as e:
+                print(f"Unexpected error in Firestore deleting {path}: {e}")
 
         # added files: files that aren't in old paths
         added = new_paths - old_paths
         for path in added:
-            content = self.get_file_content(new_tree, path) or ""
+            # Recupera info dal dizionario dei metadati
+            file_info = new_modified_dict.get(path, {})
+            content = file_info.get("content", "")
+            last_modifier = file_info.get("last-modifier", "")
+            uuid_cache = str(uuid.uuid4())
+            timestamp = datetime.datetime.now(datetime.timezone.utc)
+
+            # Aggiorna Firestore (normalizza solo per Firestore)
+            firestore_path = path.replace("/", "-").replace(".", "_")
+            doc_ref.update({f"tree.{firestore_path}": None})
+            doc_ref.update({f"last-modified.{firestore_path}": {
+                "content": content,
+                "last-modifier": last_modifier,
+                "uuid_cache": uuid_cache,
+                "timestamp": timestamp
+            }})
+
+   
             try:
-                repo.create_file(path, f"Add {path}", content)
+                repo.create_file(path, f"Add {path}, version {uuid_cache}", content or "")
                 print(f"Added: {path}")
-                commit = repo.get_commits(path=path)[0]
-                timestamp = commit.commit.author.date
-                author = commit.commit.author.name #this is not commit author, but once realtime database is up, it will be the compile author
-                safe_path = path.replace("/", "-").replace(".","_") #Firestore interprets "/" and "." as keys
-
-                try: #adds path and timestamp of the last modified file
-                    doc_ref.update({
-                        f"last_modified.{safe_path}": {
-                            "timestamp": timestamp,
-                            "author": author
-                        }
-                    })
-                except GoogleCloudError as e:
-                    print(f"Firestore update failed: {e}")
-
-                print(f"Added: {path} at {timestamp}")
-
-
             except GithubException as e:
                 if e.status == 422:
                     print(f"Already exists (skipped): {path}")
                 else:
                     print(f"Error creating {path}: {e}")
+ 
 
-        # content modified: I only check files in both to be sure
-        common = old_paths & new_paths
-        for path in common:
-            old_content = self.get_file_content(old_tree, path) or ""
-            new_content = self.get_file_content(new_tree, path) or ""
-            if old_content != new_content:
-                try:
-                    contents = repo.get_contents(path)
-                    repo.update_file(
-                        contents.path,
-                        f"Updated content of {path}",
-                        new_content,
-                        contents.sha
-                    )
-                    commit = repo.get_commits(path=path)[0]
-                    timestamp = commit.commit.author.date
-                    safe_path = path.replace("/", "-").replace(".","_")
-                    author = commit.commit.author.name
-                    try: #adds path and timestamp of the last modified file
-                        doc_ref.update({
-                            f"last_modified.{safe_path}": {
-                                "timestamp": timestamp, #time of the commit
-                                "author": author
-                            }
-                        })
-                    except GoogleCloudError as e:
-                        print(f"Firestore update failed: {e}")
-                    print(f"Updated: {path} at {timestamp}")
-                except GithubException as e:
-                    print(f"Error updating {path}: {e}")
+       
 
     def delete_project(self, repo_name):
-        repo=self.get_current_repo(repo_name)
-
+        repo = self.get_current_repo(repo_name)
         try:
             repo.delete()
             print(f"Repository {repo_name} deleted successfully")
         except GithubException as e:
             print(f"Error deleting {repo}: {e}")
+
+
+
 
 
 
