@@ -117,10 +117,18 @@ class Repository:
             try:
                 file = repo.get_contents(path)
                 repo.delete_file(file.path, f"Remove {path}", file.sha)
-                #devo usare il dizionario 
-                #TO DO
-                doc_ref.update({f"tree.{path}": DELETE_FIELD})
-                doc_ref.update({f"last-modified.{path}": DELETE_FIELD})
+                # Recupera lo stato attuale del documento
+                doc = doc_ref.get()
+                data = doc.to_dict() or {}
+                # Rimuovi la chiave dal dizionario annidato
+                for field in ["tree", "last-modified"]:
+                    if field in data and path in data[field]:
+                        del data[field][path]
+                # Aggiorna il documento con il nuovo dizionario
+                doc_ref.update({
+                    "tree": data.get("tree", {}),
+                    "last-modified": data.get("last-modified", {})
+                })
                 print(f"Deleted: {path}")
             except GithubException as e:
                 print(f"Error deleting {path}: {e}")
@@ -141,17 +149,31 @@ class Repository:
             timestamp = datetime.datetime.now(datetime.timezone.utc)
             print(f"Adding file at {path} with content: {repr(content)} and last modifier: {last_modifier}")
 
-            # Aggiorna Firestore (normalizza solo per Firestore)
-            firestore_path = path.replace("/", "-").replace(".", "_")
-            doc_ref.update({f"tree.{firestore_path}": ""})
-            doc_ref.update({f"last-modified.{firestore_path}": {
+            # Recupera lo stato attuale del documento
+            doc = doc_ref.get()
+            data = doc.to_dict() or {}
+            # Aggiorna i dizionari annidati
+            if "tree" not in data or not isinstance(data["tree"], dict):
+                data["tree"] = {}
+            if "last-modified" not in data or not isinstance(data["last-modified"], dict):
+                data["last-modified"] = {}
+            data["tree"][path] = "" #add new empty file at the tree
+            data["last-modified"][path] = {
                 "content": content,
                 "last-modifier": last_modifier,
                 "uuid_cache": uuid_cache,
                 "timestamp": timestamp
-            }})
+            }
+            # Aggiorna il documento con il nuovo dizionario
+            try:
+                doc_ref.update({
+                    "tree": data["tree"],
+                    "last-modified": data["last-modified"]
+                })
+            except GoogleCloudError as e:
+                print(f"Unexpected error in Firestore updating {path}: {e}")
+                
 
-   
             try:
                 repo.create_file(path, f"Add {path}, version {uuid_cache}", content or "")
                 print(f"Added: {path}")
