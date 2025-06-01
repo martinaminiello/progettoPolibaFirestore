@@ -33,7 +33,7 @@ def project_created(event: firestore_fn.Event) -> None:
     Collection_name = "projects"
     # remember to also change the path in cloud functions parameter(document="current_projects/{docId}"
     # github authentication
-    token = "token"
+    token = ""
     auth = Auth.Token(token)
     g = Github(auth=auth)
     print(f"User {g.get_user().login}")
@@ -72,16 +72,30 @@ def project_created(event: firestore_fn.Event) -> None:
             return
 
         file_paths = repository.extract_file_paths(tree) #build all files paths from the tree
-        repository.create_tree(file_paths, myuuid, last_modified_info)
-        if last_modified_info:
-            updates = {}
-            for file_path in last_modified_info:
-                updates[f"last-modified.{file_path}.content"] = DELETE_FIELD
-                updates[f"last-modified.{file_path}.uuid_cache"] = DELETE_FIELD
-            try:
-             db.collection(Collection_name).document(doc_id).update(updates)
-            except GoogleCloudError as e:
-                print(f"Firestore content deletion failed: {e}")
+        # Procedi all'eliminazione dei campi solo se create_tree ha successo
+        create_tree_success = True
+        try:
+            repository.create_tree(file_paths, myuuid, last_modified_info)
+        except Exception as e:
+            print(f"Errore in create_tree: {e}")
+            create_tree_success = False
+
+        if last_modified_info and create_tree_success:
+            doc = db.collection(Collection_name).document(doc_id).get()
+            data = doc.to_dict() or {}
+            if "last-modified" in data and isinstance(data["last-modified"], dict):
+                for file_path in last_modified_info:
+                    if file_path in data["last-modified"]:
+                        if "content" in data["last-modified"][file_path]:
+                            del data["last-modified"][file_path]["content"]
+                        if "uuid_cache" in data["last-modified"][file_path]:
+                            del data["last-modified"][file_path]["uuid_cache"]
+                try:
+                    db.collection(Collection_name).document(doc_id).update({
+                        "last-modified": data["last-modified"]
+                    })
+                except GoogleCloudError as e:
+                    print(f"Firestore content deletion failed: {e}")
 
 
 
@@ -90,7 +104,7 @@ def project_updated(event: firestore_fn.Event) -> None:
         print("On project updated triggered")
 
         # github authentication
-        token = "token"
+        token = ""
         auth = Auth.Token(token)
         g = Github(auth=auth)
         print(f"User f{g.get_user().login}")
@@ -118,21 +132,28 @@ def project_updated(event: firestore_fn.Event) -> None:
         if (old_path is None and new_path) or (old_path != new_path): # so if old tree is null () (user creates empty project)
          repository.update_tree(old_path,new_path,my_uuid, doc_ref, last_modified_info )        # it still works
         if last_modified_info:
-            updates = {}
-            for file_path in last_modified_info:
-                updates[f"last-modified.{file_path}.content"] = DELETE_FIELD
-                updates[f"last-modified.{file_path}.uuid_cache"] = DELETE_FIELD
-            try:
-             db.collection(Collection_name).document(doc_id).update(updates)
-            except GoogleCloudError as e:
-                print(f"Firestore content deletion failed: {e}")
+            doc = db.collection(Collection_name).document(doc_id).get()
+            data = doc.to_dict() or {}
+            if "last-modified" in data and isinstance(data["last-modified"], dict):
+                for file_path in last_modified_info:
+                    if file_path in data["last-modified"]:
+                        if "content" in data["last-modified"][file_path]:
+                            del data["last-modified"][file_path]["content"]
+                        if "uuid_cache" in data["last-modified"][file_path]:
+                            del data["last-modified"][file_path]["uuid_cache"]
+                try:
+                    db.collection(Collection_name).document(doc_id).update({
+                        "last-modified": data["last-modified"]
+                    })
+                except GoogleCloudError as e:
+                    print(f"Firestore content deletion failed: {e}")
 
 @firestore_fn.on_document_deleted(document="projects/{docId}")
 def project_deleted(event: firestore_fn.Event) -> None:
 
         print("On project deleted triggered")
         # github authentication
-        token = "token"
+        token = ""
         auth = Auth.Token(token)
         g = Github(auth=auth)
         print(f"User f{g.get_user().login}")
@@ -168,6 +189,7 @@ def oncreate(event: db_fn.Event) -> None:
     
 
     tree_firestore, last_modified_info = utils.split_tree(tree)
+    print("tree_structure:", tree_firestore)
     data["tree"] = tree_firestore  # realtime tree is converted to firestore tree
     last_modified = utils.insert_last_modified(last_modified_info)  # calcola last_modified prima di usarlo
     data["last-modified"] = last_modified["last-modified"]  # aggiungi last-modified direttamente a data
@@ -218,7 +240,7 @@ def onupdate(event: db_fn.Event) -> None:
     db = firestore.client()
     Collection_name = "projects"
     project_id = event.params["projectId"]
-    token = "token"
+    token = ""
     auth = Auth.Token(token)
     g = Github(auth=auth)
     print(f"User {g.get_user().login}")
