@@ -49,7 +49,7 @@ def split_tree(tree, base_path=""):
 def insert_last_modified(file_info_dict):
     last_modified_dict = {}
     for filepath, info in file_info_dict.items():
-        filepath = filepath.replace("/","-").replace(".","_")
+     
         uuid_cache = str(uuid.uuid4())
         timestamp = datetime.datetime.now(datetime.timezone.utc)
         last_modified_dict[filepath] = {

@@ -45,15 +45,25 @@ class Repository:
             return paths
 
         for key, value in tree_map.items():
-            new_path = f"{current_path}/{key}" if current_path else key
-            # If value is a dict and has 'content', treat as file, else recurse
-            if isinstance(value, dict):
-                if "content" in value and "last-modifier" in value:
-                    paths.append(new_path)
-                else:
+            # Sostituisci l'ultimo '_' con '.' solo se non c'è già un punto
+            if isinstance(value, dict) and "content" in value and "last-modifier" in value:
+                # Considera che il file può essere in una sottocartella
+                new_key = key
+                if "_" in key and "." not in key:
+                    new_key = key[::-1].replace("_", ".", 1)[::-1]  # solo l'ultimo _
+                new_path = f"{current_path}/{new_key}" if current_path else new_key
+                paths.append(new_path)
+            else:
+                new_path = f"{current_path}/{key}" if current_path else key
+                if isinstance(value, dict):
                     paths.extend(self.extract_file_paths(value, new_path))
-            elif isinstance(value, str): #if values is a string (just a file) adds it to paths
-                 paths.append(new_path)
+                elif isinstance(value, str):
+                    # Anche qui, se è un file semplice
+                    new_key = key
+                    if "_" in key and "." not in key:
+                        new_key = key[::-1].replace("_", ".", 1)[::-1]
+                    new_path = f"{current_path}/{new_key}" if current_path else new_key
+                    paths.append(new_path)
         return paths
 
     
@@ -70,8 +80,7 @@ class Repository:
 
         for path in file_paths:
             print(f"Processing path: {path}")
-            last_modified_path = path.replace("/", "-").replace(".", "_")
-            file_info = last_modified_info.get(last_modified_path, {})
+            file_info = last_modified_info.get(path, {})
             content = file_info.get("content", "")
             author = file_info.get("last-modifier")
             uuid_cache = file_info.get("uuid_cache")
@@ -87,6 +96,8 @@ class Repository:
                     print(f"Error creating new file: {path}: {e}")
 
 
+
+
     def update_tree(self, old_tree, new_tree, repo_name, doc_ref, old_last_modified_info):
         repo = self.get_current_repo(repo_name)
 
@@ -99,10 +110,15 @@ class Repository:
 
         # deleted file: files that are no longer in new paths
         deleted = old_paths - new_paths
+        print("old_paths:", old_paths)
+        print("new_paths:", new_paths)
         for path in deleted:
+            print("To delete: ", path)
             try:
                 file = repo.get_contents(path)
                 repo.delete_file(file.path, f"Remove {path}", file.sha)
+                #devo usare il dizionario 
+                #TO DO
                 doc_ref.update({f"tree.{path}": DELETE_FIELD})
                 doc_ref.update({f"last-modified.{path}": DELETE_FIELD})
                 print(f"Deleted: {path}")
@@ -113,17 +129,21 @@ class Repository:
 
         # added files: files that aren't in old paths
         added = new_paths - old_paths
+        print("old_paths:", old_paths)
+        print("new_paths:", new_paths)
         for path in added:
+            print("To add: ", path)
             # Recupera info dal dizionario dei metadati
             file_info = new_modified_dict.get(path, {})
             content = file_info.get("content", "")
             last_modifier = file_info.get("last-modifier", "")
             uuid_cache = str(uuid.uuid4())
             timestamp = datetime.datetime.now(datetime.timezone.utc)
+            print(f"Adding file at {path} with content: {repr(content)} and last modifier: {last_modifier}")
 
             # Aggiorna Firestore (normalizza solo per Firestore)
             firestore_path = path.replace("/", "-").replace(".", "_")
-            doc_ref.update({f"tree.{firestore_path}": None})
+            doc_ref.update({f"tree.{firestore_path}": ""})
             doc_ref.update({f"last-modified.{firestore_path}": {
                 "content": content,
                 "last-modifier": last_modifier,

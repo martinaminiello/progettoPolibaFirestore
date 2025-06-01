@@ -148,8 +148,7 @@ def project_deleted(event: firestore_fn.Event) -> None:
 @db_fn.on_value_created(reference="/active_projects/{projectId}")
 def oncreate(event: db_fn.Event) -> None:
     raw_data = event.data # rtdb gives already a dictionary
-    print(f"Realtime database on create: {raw_data}")
-    data = utils.convert_tree_keys(raw_data)
+    data=utils.convert_tree_keys(raw_data)  # replaces "_" with "." 
     print(f"Sanitized data: {data}")
     tree=data.get("tree")
     print(f"Tree: {tree}")
@@ -226,14 +225,15 @@ def onupdate(event: db_fn.Event) -> None:
     u = User(token)
     repository = Repository(u)
     doc_ref = db.collection(Collection_name).document(project_id)
-    repo_name=doc_ref.get("repo_uuid")
+    doc_snapshot = doc_ref.get()
+    repo_name = doc_snapshot.get("repo_uuid")
 
     before = event.data.before
     after = event.data.after
 
 
     
-    doc_snapshot = doc_ref.get()
+    
     if not doc_snapshot.exists:
         print(f"Document {project_id} does not exist in Firestore.")
         return
@@ -248,12 +248,13 @@ def onupdate(event: db_fn.Event) -> None:
 
     old_tree = event.data.before.get("tree", {})
     new_tree = event.data.after.get("tree", {})
-    old_last_modified=doc_ref.get("last-modified", {})
+    doc_snapshot = doc_ref.get()
+    old_last_modified = doc_snapshot.to_dict().get("last-modified", {})
     #update tree only for added or removed files
     if before.get("tree") != after.get("tree"):
         repository.update_tree(old_tree, new_tree, repo_name, doc_ref, old_last_modified)
 
-    
+
 
 
 
