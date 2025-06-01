@@ -16,6 +16,17 @@ def set_nested_dict(tree, path, value):
         d = d[part]
     d[parts[-1]] = value
 
+        # utility function: remove path from tree
+def remove_path_from_tree(tree, path):
+    parts = path.split('/')
+    d = tree
+    for part in parts[:-1]:
+        if part in d and isinstance(d[part], dict):
+           d = d[part]
+        else:
+            return  # path non trovato
+    d.pop(parts[-1], None)
+
 
 class Repository:
 
@@ -116,29 +127,20 @@ class Repository:
         new_paths = set(self.extract_file_paths(new_tree))
 
         print(f"File info dict: {new_info}")
-        new_modified_dict = utils.insert_last_modified(new_info)["last-modified"]
-        print(f"New modified dict: {new_modified_dict}")
+        new_modified_dict = utils.insert_last_modified(new_info)["last-modified"] #updates dictinary with new paths
+ 
 
-        # Recupera lo stato attuale del documento una sola volta
         doc = doc_ref.get()
         data = doc.to_dict() or {}
+        #if tree or last-modified are not present, initialize them
         if "tree" not in data or not isinstance(data["tree"], dict):
             data["tree"] = {}
         if "last-modified" not in data or not isinstance(data["last-modified"], dict):
             data["last-modified"] = {}
 
-        # Funzione di utilità per rimuovere un path annidato dal tree
-        def remove_path_from_tree(tree, path):
-            parts = path.split('/')
-            d = tree
-            for part in parts[:-1]:
-                if part in d and isinstance(d[part], dict):
-                    d = d[part]
-                else:
-                    return  # path non trovato
-            d.pop(parts[-1], None)
 
-        # deleted file: files that are no longer in new paths
+
+        # DELETED file: files that are no longer in new paths
         deleted = old_paths - new_paths
         print("old_paths:", old_paths)
         print("new_paths:", new_paths)
@@ -151,17 +153,18 @@ class Repository:
                 print(f"Error deleting {path}: {e}")
             except GoogleCloudError as e:
                 print(f"Unexpected error in Firestore deleting {path}: {e}")
-            # Rimuovi dal tree annidato e da last-modified
+            # REMOVE path from tree and last-modified
             remove_path_from_tree(data["tree"], path)
             if path in data["last-modified"]:
                 del data["last-modified"][path]
             print(f"Deleted: {path}")
 
-        # added files: files that aren't in old paths
+        # ADDED files: files that aren't in old paths
         added = new_paths - old_paths
         print("old_paths:", old_paths)
         print("new_paths:", new_paths)
         print(f"new_info chiavi: {list(new_info.keys())}")
+        added_success = set()
         for path in added:
             print("To add: ", path)
             file_info = new_info.get(path, {})
@@ -174,8 +177,9 @@ class Repository:
             uuid_cache = str(uuid.uuid4())
             timestamp = datetime.datetime.now(datetime.timezone.utc)
             print(f"Adding file at {path} with content: {repr(content)} and last modifier: {last_modifier}")
-            # Aggiorna i dizionari annidati
+            # Update the tree structure
             set_nested_dict(data["tree"], path, "")
+            # Update the last-modified info
             data["last-modified"][path] = {
                 "content": content,
                 "last-modifier": last_modifier,
@@ -185,21 +189,62 @@ class Repository:
             try:
                 repo.create_file(path, f"Add {path}, version {uuid_cache}", content or "")
                 print(f"Added: {path}")
+                added_success.add(path)
             except GithubException as e:
                 if e.status == 422:
                     print(f"Already exists (skipped): {path}")
+                    added_success.add(path)
                 else:
                     print(f"Error creating {path}: {e}")
 
-        # Pulisci content e uuid_cache dai file rimasti in last-modified
-        for file_path in list(data["last-modified"].keys()):
-            if file_path not in added:
+        # for each added file, remove content and uuid_cache from last-modified
+        for file_path in added_success:
+            if file_path in data["last-modified"]:
                 if "content" in data["last-modified"][file_path]:
                     del data["last-modified"][file_path]["content"]
                 if "uuid_cache" in data["last-modified"][file_path]:
                     del data["last-modified"][file_path]["uuid_cache"]
 
-        # Aggiorna il documento Firestore una sola volta
+        
+        try: # update the Firestore document with the new tree and last-modified info
+            doc_ref.update({
+                "tree": data["tree"],
+                "last-modified": data["last-modified"]
+            })
+        except GoogleCloudError as e:
+            print(f"Firestore update failed: {e}")
+
+        #MODIFIED files: files that are in both old and new paths
+        modified = old_paths & new_paths
+        for path in modified:
+            if new_info.get(path, {}).get("content") != old_info.get(path, {}).get("content"):
+                print(f"Modifying file at {path}")
+                file_info = new_info.get(path, {})
+                content = file_info.get("content", "")
+                last_modifier = file_info.get("last-modifier", "")
+                uuid_cache = str(uuid.uuid4())
+                timestamp = datetime.datetime.now(datetime.timezone.utc)
+                try:
+                    file = repo.get_contents(path)
+                    repo.update_file(file.path, f"Update {path}, version {uuid_cache}", content or "", file.sha)
+                    print(f"Modified: {path}")
+                    # Update the last-modified info
+                    data["last-modified"][path] = {
+                        "content": content,
+                        "last-modifier": last_modifier,
+                        "uuid_cache": uuid_cache,
+                        "timestamp": timestamp
+                    }
+                    # after updating, remove content and uuid_cache from last-modified
+                    if path in data["last-modified"]:
+                        if "content" in data["last-modified"][path]:
+                            del data["last-modified"][path]["content"]
+                        if "uuid_cache" in data["last-modified"][path]:
+                            del data["last-modified"][path]["uuid_cache"]
+                except GithubException as e:
+                    print(f"Error updating {path}: {e}")
+
+        # update the Firestore document with the new tree and last-modified info
         try:
             doc_ref.update({
                 "tree": data["tree"],
@@ -207,6 +252,8 @@ class Repository:
             })
         except GoogleCloudError as e:
             print(f"Firestore update failed: {e}")
+
+
 
     def delete_project(self, repo_name):
         repo = self.get_current_repo(repo_name)

@@ -72,7 +72,7 @@ def project_created(event: firestore_fn.Event) -> None:
             return
 
         file_paths = repository.extract_file_paths(tree) #build all files paths from the tree
-        # Procedi all'eliminazione dei campi solo se create_tree ha successo
+        # delete content and uuid_cache from last_modified_info only if create_tree is successful
         create_tree_success = True
         try:
             repository.create_tree(file_paths, myuuid, last_modified_info)
@@ -206,6 +206,7 @@ def onupdate(event: db_fn.Event) -> None:
     before = event.data.before
     after = event.data.after
 
+  
 
     
     
@@ -223,6 +224,34 @@ def onupdate(event: db_fn.Event) -> None:
         try:
             doc_ref.update(updates)
             print(f"Updated simple fields: {updates}")
+            # Se è stato modificato current-authors, aggiorna anche i progetti degli utenti
+            if "current-authors" in updates:
+                users_id = after["current-authors"]
+                if isinstance(users_id, dict):
+                    users_id = list(users_id.values())
+                elif not isinstance(users_id, list):
+                    users_id = [users_id]
+                user_docs = list(
+                    db.collection("users")
+                    .where(filter=FieldFilter("id", "in", users_id))
+                    .stream()
+                )
+                user_project = {
+                    'id': project_id,
+                    'workbench': False,
+                    'active': True,
+                    'tags': ""
+                }
+                for user_doc in user_docs:
+                    user_id = user_doc.get("id")
+                    user_ref = user_doc.reference
+                    try:
+                        user_ref.update({
+                            "projects": ArrayUnion([user_project])
+                        })
+                        print(f"Added project {project_id} to {user_id}.")
+                    except Exception as e:
+                        print(f"Error: {user_id}: {e}")
         except GoogleCloudError as e:
             print(f"Error updating simple fields: {e}")
 
@@ -231,8 +260,9 @@ def onupdate(event: db_fn.Event) -> None:
     new_tree = event.data.after.get("tree", {})
     old_file_info = utils.split_tree(old_tree)[1]
     old_file_info_converted = utils.convert_tree_keys(old_file_info) #convert old file info keys to be compatible with firestore
-    new_file_info_converted = utils.convert_tree_keys(utils.split_tree(new_tree)[1]) #convert new file info keys to be compatible with firestore
     new_file_info = utils.split_tree(new_tree)[1]
+    new_file_info_converted = utils.convert_tree_keys(new_file_info) #convert new file info keys to be compatible with firestore
+    
     doc_snapshot = doc_ref.get()
     #update tree only for added or removed files
     if before.get("tree") != after.get("tree"):
@@ -242,7 +272,7 @@ def onupdate(event: db_fn.Event) -> None:
         
         except Exception as e:
             print(f"Errore in update_tree: {e}")
-         
+
 
 
 
