@@ -99,54 +99,7 @@ def project_created(event: firestore_fn.Event) -> None:
 
 
 
-@firestore_fn.on_document_updated(document="projects/{docId}")
-def project_updated(event: firestore_fn.Event) -> None:
-        print("On project updated triggered")
 
-        # github authentication
-        token = ""
-        auth = Auth.Token(token)
-        g = Github(auth=auth)
-        print(f"User f{g.get_user().login}")
-        u = User(token)
-        repository = Repository(u)
-
-        db = firestore.client()
-        Collection_name = "projects"
-        doc_id = event.params["docId"]
-        doc_ref = db.collection(Collection_name).document(doc_id)
-
-
-        object_data_new = event.data.after.to_dict()
-        object_data_old = event.data.before.to_dict()
-
-        old_path = object_data_old.get("tree")
-        new_path = object_data_new.get("tree")
-        last_modified_info = object_data_new.get("last-modified")
-
-        my_uuid = event.data.after.to_dict().get("repo_uuid") #retrieves uuid so it knows which repository must be updated
-        if not my_uuid:
-            print("repo_uuid not found.")
-            return
-
-        if (old_path is None and new_path) or (old_path != new_path): # so if old tree is null () (user creates empty project)
-         repository.update_tree(old_path,new_path,my_uuid, doc_ref, last_modified_info )        # it still works
-        if last_modified_info:
-            doc = db.collection(Collection_name).document(doc_id).get()
-            data = doc.to_dict() or {}
-            if "last-modified" in data and isinstance(data["last-modified"], dict):
-                for file_path in last_modified_info:
-                    if file_path in data["last-modified"]:
-                        if "content" in data["last-modified"][file_path]:
-                            del data["last-modified"][file_path]["content"]
-                        if "uuid_cache" in data["last-modified"][file_path]:
-                            del data["last-modified"][file_path]["uuid_cache"]
-                try:
-                    db.collection(Collection_name).document(doc_id).update({
-                        "last-modified": data["last-modified"]
-                    })
-                except GoogleCloudError as e:
-                    print(f"Firestore content deletion failed: {e}")
 
 @firestore_fn.on_document_deleted(document="projects/{docId}")
 def project_deleted(event: firestore_fn.Event) -> None:
@@ -266,15 +219,30 @@ def onupdate(event: db_fn.Event) -> None:
     for field in ["title", "current-authors", "owners"]:
         if before.get(field) != after.get(field):
             updates[field] = after.get(field)
-
+    if updates:
+        try:
+            doc_ref.update(updates)
+            print(f"Updated simple fields: {updates}")
+        except GoogleCloudError as e:
+            print(f"Error updating simple fields: {e}")
 
     old_tree = event.data.before.get("tree", {})
+    old_tree_structure=utils.split_tree(old_tree)[0] #split tree to get the structure
     new_tree = event.data.after.get("tree", {})
+    old_file_info = utils.split_tree(old_tree)[1]
+    old_file_info_converted = utils.convert_tree_keys(old_file_info) #convert old file info keys to be compatible with firestore
+    new_file_info_converted = utils.convert_tree_keys(utils.split_tree(new_tree)[1]) #convert new file info keys to be compatible with firestore
+    new_file_info = utils.split_tree(new_tree)[1]
     doc_snapshot = doc_ref.get()
-    old_last_modified = doc_snapshot.to_dict().get("last-modified", {})
     #update tree only for added or removed files
     if before.get("tree") != after.get("tree"):
-        repository.update_tree(old_tree, new_tree, repo_name, doc_ref, old_last_modified)
+       
+        try:
+            repository.update_tree(old_tree_structure, new_tree, repo_name, doc_ref, old_file_info_converted, new_file_info_converted)
+        
+        except Exception as e:
+            print(f"Errore in update_tree: {e}")
+         
 
 
 
