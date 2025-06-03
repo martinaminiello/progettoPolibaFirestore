@@ -5,6 +5,7 @@ from google.cloud.firestore_v1 import FieldFilter, ArrayUnion
 from google.cloud.firestore_v1 import DELETE_FIELD
 import utils
 from repomanager import Repository
+import time
 from user import User
 from firebase_admin import initialize_app, firestore, credentials
 from firebase_functions import firestore_fn
@@ -148,17 +149,20 @@ def oncreate(event: db_fn.Event) -> None:
     project_id = data['id']
     Collection_name = "projects"
     users_id = data['co-authors']
-    # Ensure users_id is a list of user IDs
+    current_authors = data.get('current-authors', [])
+    # Ensure users_id and current_authors are lists
     if isinstance(users_id, dict):
         users_id = list(users_id.values())
     elif not isinstance(users_id, list):
         users_id = [users_id]
+    if isinstance(current_authors, dict):
+        current_authors = list(current_authors.values())
+    elif not isinstance(current_authors, list):
+        current_authors = [current_authors]
 
     doc_ref = db.collection(Collection_name).document(project_id)
     doc_snapshot = doc_ref.get()
     
-    
-
     tree_firestore, last_modified_info = utils.split_tree(tree)
     print("tree_structure:", tree_firestore)
     data["tree"] = tree_firestore  # realtime tree is converted to firestore tree
@@ -176,33 +180,33 @@ def oncreate(event: db_fn.Event) -> None:
     if not isinstance(users_id, list):
         users_id = [users_id]
 
-    user_docs = list( # retrieves all users that are current-authors of the project
+    # Unisci co-authors e current-authors per evitare duplicati
+    all_user_ids = set(users_id) | set(current_authors)
+    user_docs = list(
         db.collection("users")
-        .where(filter=FieldFilter("id", "in", users_id))
+        .where(filter=FieldFilter("id", "in", list(all_user_ids)))
         .stream()
     )
-    user_project = {
-        'id': project_id,
-        'workbench': False,
-        'active': False,
-        'tags': "" # tags will be retrieved from the client app
-    }
+    for user_doc in user_docs:
+        user_id = user_doc.get("id")
+        is_current = user_id in current_authors
+        user_project = {
+            'id': project_id,
+            'workbench': False,
+            'active': is_current,
+            'tags': ""
+        }
+        user_ref = user_doc.reference
+        try:
+            user_ref.update({
+                "projects": ArrayUnion([user_project])
+            })
+            print(f"Added project {project_id} to {user_id} with active={is_current}.")
+        except Exception as e:
+            print(f"Error: {user_id}: {e}")
 
 
-    user_id=""
-    if not user_docs:
-        print(f"User {user_id} doesn't exist.")
-    else:
-        for user_doc in user_docs:
-            user_id = user_doc.get("id")
-            user_ref = user_doc.reference
-            try:
-                user_ref.update({
-                    "projects": ArrayUnion([user_project])
-                })
-                print(f"Added project {project_id} to {user_id}.")
-            except Exception as e:
-                print(f"Error: {user_id}: {e}")
+
 
 
 @db_fn.on_value_updated(reference="/active_projects/{projectId}")
