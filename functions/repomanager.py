@@ -66,24 +66,15 @@ class Repository:
             return paths
 
         for key, value in tree_map.items():
-            # Sostituisci l'ultimo '_' con '.' solo se non c'è già un punto
             if isinstance(value, dict) and "content" in value and "last-modifier" in value:
-                # Considera che il file può essere in una sottocartella
-                new_key = key
-                if "_" in key and "." not in key:
-                    new_key = key[::-1].replace("_", ".", 1)[::-1]  # solo l'ultimo _
-                new_path = f"{current_path}/{new_key}" if current_path else new_key
+                new_path = f"{current_path}/{key}" if current_path else key
                 paths.append(new_path)
             else:
                 new_path = f"{current_path}/{key}" if current_path else key
                 if isinstance(value, dict):
                     paths.extend(self.extract_file_paths(value, new_path))
                 elif isinstance(value, str):
-                    # Anche qui, se è un file semplice
-                    new_key = key
-                    if "_" in key and "." not in key:
-                        new_key = key[::-1].replace("_", ".", 1)[::-1]
-                    new_path = f"{current_path}/{new_key}" if current_path else new_key
+                    new_path = f"{current_path}/{key}" if current_path else key
                     paths.append(new_path)
         return paths
 
@@ -186,8 +177,16 @@ class Repository:
                 "uuid_cache": uuid_cache,
                 "timestamp": timestamp
             }
+
             try:
-                repo.create_file(path, f"Add {path}, version {uuid_cache}", content or "")
+                doc_ref.update({
+                     "last-edit": data["last-modified"][path]["timestamp"]
+                })
+            except GoogleCloudError as e:
+                print(f"Firestore update failed for last-edited: {e}")
+            
+            try:
+                repo.create_file(path, f"Add {path},  version {uuid_cache}", content or "")
                 print(f"Added: {path}")
                 added_success.add(path)
             except GithubException as e:
@@ -207,6 +206,10 @@ class Repository:
 
         
         try: # update the Firestore document with the new tree and last-modified info
+            # Prima di aggiornare Firestore, converti le chiavi dei file
+            data["tree"] = utils.convert_tree_keys(data["tree"])
+            data["last-modified"] = utils.convert_tree_keys(data["last-modified"])
+            # update the Firestore document with the new tree and last-modified info
             doc_ref.update({
                 "tree": data["tree"],
                 "last-modified": data["last-modified"]
@@ -235,6 +238,14 @@ class Repository:
                         "uuid_cache": uuid_cache,
                         "timestamp": timestamp
                     }
+                    
+                    try:
+                        doc_ref.update({
+                            "last-edit": data["last-modified"][path]["timestamp"]
+                        })
+                    except GoogleCloudError as e:
+                        print(f"Firestore update failed: {e}")
+                    
                     # after updating, remove content and uuid_cache from last-modified
                     if path in data["last-modified"]:
                         if "content" in data["last-modified"][path]:
@@ -244,6 +255,9 @@ class Repository:
                 except GithubException as e:
                     print(f"Error updating {path}: {e}")
 
+        # Prima di aggiornare Firestore, converti le chiavi dei file anche qui
+        data["tree"] = utils.convert_tree_keys(data["tree"])
+        data["last-modified"] = utils.convert_tree_keys(data["last-modified"])
         # update the Firestore document with the new tree and last-modified info
         try:
             doc_ref.update({

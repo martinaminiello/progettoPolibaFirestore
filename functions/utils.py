@@ -6,7 +6,18 @@ def convert_tree_keys(tree_section):
     if isinstance(tree_section, dict):
         new_tree = {}
         for key, value in tree_section.items():
-            new_key = key.replace("_", ".")
+            # Se è un file (dopo split_tree: valore stringa vuota)
+            if value == "":
+                new_key = key[::-1].replace("_", ".", 1)[::-1]
+            # Se è un file (prima di split_tree: dict con content e last-modifier)
+            elif (
+                isinstance(value, dict)
+                and "content" in value
+                and "last-modifier" in value
+            ):
+                new_key = key[::-1].replace("_", ".", 1)[::-1]
+            else:
+                new_key = key
             new_tree[new_key] = convert_tree_keys(value)
         return new_tree
     elif isinstance(tree_section, list):

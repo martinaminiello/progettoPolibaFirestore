@@ -66,7 +66,9 @@ def project_created(event: firestore_fn.Event) -> None:
             "creation-time": timestamp #creation date is stored in firestore
         })
 
-        tree = object_data.get("tree") #retrieves tree from object event
+        tree_realtime = object_data.get("tree") #retrieves tree from object event
+        tree=utils.convert_tree_keys(tree)
+
         last_modified_info = object_data.get("last-modified") #retrieves last modified info from object event
         if not tree:
             print("No 'tree' found in document.") #user creates project for the first time (so it's empty)
@@ -94,6 +96,9 @@ def project_created(event: firestore_fn.Event) -> None:
                 try:
                     db.collection(Collection_name).document(doc_id).update({
                         "last-modified": data["last-modified"]
+                    })
+                    db.collection(Collection_name).document(doc_id).update({
+                        "last-edited": data["last-modified"]
                     })
                 except GoogleCloudError as e:
                     print(f"Firestore content deletion failed: {e}")
@@ -326,12 +331,20 @@ def onupdate(event: db_fn.Event) -> None:
         except GoogleCloudError as e:
             print(f"Error updating simple fields: {e}")
 
-    old_tree = event.data.before.get("tree", {})
-    old_tree_structure=utils.split_tree(old_tree)[0] #split tree to get the structure
-    new_tree = event.data.after.get("tree", {})
-    old_file_info = utils.split_tree(old_tree)[1]
+    old_tree_realtime = event.data.before.get("tree", {})
+    old_tree_structure=utils.split_tree(old_tree_realtime)[0] #split tree to get the structure
+    old_tree=utils.convert_tree_keys(old_tree_structure)
+    print(f"Old tree: {old_tree}")
+    
+    new_tree_realtime = event.data.after.get("tree", {})
+    new_tree_structure=utils.split_tree(new_tree_realtime)[0] #split tree to get the structure
+    new_tree=utils.convert_tree_keys(new_tree_structure)
+    print(f"New tree: {new_tree}")
+
+    old_file_info = utils.split_tree(old_tree_realtime)[1]
     old_file_info_converted = utils.convert_tree_keys(old_file_info) #convert old file info keys to be compatible with firestore
-    new_file_info = utils.split_tree(new_tree)[1]
+    
+    new_file_info = utils.split_tree(new_tree_realtime)[1]
     new_file_info_converted = utils.convert_tree_keys(new_file_info) #convert new file info keys to be compatible with firestore
     
     doc_snapshot = doc_ref.get()
@@ -339,7 +352,7 @@ def onupdate(event: db_fn.Event) -> None:
     if before.get("tree") != after.get("tree"):
        
         try:
-            repository.update_tree(old_tree_structure, new_tree, repo_name, doc_ref, old_file_info_converted, new_file_info_converted)
+            repository.update_tree(old_tree, new_tree, repo_name, doc_ref, old_file_info_converted, new_file_info_converted)
         
         except Exception as e:
             print(f"Errore in update_tree: {e}")
