@@ -103,17 +103,35 @@ def project_created(event: firestore_fn.Event) -> None:
 
 @firestore_fn.on_document_deleted(document="projects/{docId}")
 def project_deleted(event: firestore_fn.Event) -> None:
+    print("On project deleted triggered")
+    # github authentication
+    token = ""
+    auth = Auth.Token(token)
+    g = Github(auth=auth)
+    print(f"User f{g.get_user().login}")
+    u = User(token)
+    repository = Repository(u)
+    my_uuid = event.data.to_dict().get("repo_uuid")
+    repository.delete_project(my_uuid)
+    data = event.data.to_dict() if hasattr(event.data, 'to_dict') else event.data
+    db = firestore.client()
+    project_id = data['id']
+    print(f"Project {project_id} deleted from Firestore.")
+    users_id = data.get('co-authors', [])
+    print(f"Users to update: {users_id}")
+    if isinstance(users_id, dict):
+        users_id = list(users_id.values())
+    elif not isinstance(users_id, list):
+        users_id = [users_id]
+    user_docs = db.collection("users").where("id", "in", users_id).stream()
+    for user_doc in user_docs:
+        user_ref = user_doc.reference
+        user_data = user_doc.to_dict() or {}
+        projects = user_data.get("projects", [])
+        updated_projects = [proj for proj in projects if proj.get('id') != project_id]
+        print(f"Updating user {user_data.get('id')} projects: {updated_projects}")
+        user_ref.update({"projects": updated_projects})
 
-        print("On project deleted triggered")
-        # github authentication
-        token = ""
-        auth = Auth.Token(token)
-        g = Github(auth=auth)
-        print(f"User f{g.get_user().login}")
-        u = User(token)
-        repository = Repository(u)
-        my_uuid = event.data.to_dict().get("repo_uuid")
-        repository.delete_project(my_uuid)
 
 
 
@@ -129,7 +147,7 @@ def oncreate(event: db_fn.Event) -> None:
     db = firestore.client()
     project_id = data['id']
     Collection_name = "projects"
-    users_id = data['current-authors']
+    users_id = data['co-authors']
     # Ensure users_id is a list of user IDs
     if isinstance(users_id, dict):
         users_id = list(users_id.values())
@@ -166,7 +184,7 @@ def oncreate(event: db_fn.Event) -> None:
     user_project = {
         'id': project_id,
         'workbench': False,
-        'active': True,
+        'active': False,
         'tags': "" # tags will be retrieved from the client app
     }
 
