@@ -217,16 +217,65 @@ def onupdate(event: db_fn.Event) -> None:
     updates = {}
 
     # update simple fields
-    for field in ["title", "current-authors", "owners"]:
+    for field in ["title", "current-authors", "owners", "co-authors"]: #perhaps co-authors is managed directly between the client and Firestore
         if before.get(field) != after.get(field):
             updates[field] = after.get(field)
     if updates:
         try:
             doc_ref.update(updates)
             print(f"Updated simple fields: {updates}")
-            # Se è stato modificato current-authors, aggiorna anche i progetti degli utenti
+          
             if "current-authors" in updates:
-                users_id = after["current-authors"]
+                before_authors = before.get("current-authors", [])
+                after_authors = after.get("current-authors", [])
+                if isinstance(before_authors, dict):
+                    before_authors = set(before_authors.values())
+                else:
+                    before_authors = set(before_authors)
+                if isinstance(after_authors, dict):
+                    after_authors = set(after_authors.values())
+                else:
+                    after_authors = set(after_authors)
+                not_current_anymore = before_authors - after_authors
+                just_added = after_authors - before_authors
+                if not_current_anymore:
+                    for deleted in not_current_anymore:
+                        user_ref = db.collection("users").document(deleted)
+                        user_doc = user_ref.get()
+                        if user_doc.exists:
+                            projects = user_doc.get("projects") or []
+                            updated_projects = []
+                            for proj in projects:
+                                if proj.get('id') == project_id:
+                                    proj = dict(proj)
+                                    proj['active'] = False
+                                updated_projects.append(proj)
+                            user_ref.update({"projects": updated_projects})
+                if just_added:
+                    for added in just_added:
+                        user_ref = db.collection("users").document(added)
+                        user_doc = user_ref.get()
+                        if user_doc.exists:
+                            projects = user_doc.get("projects") or []
+                            found = False
+                            updated_projects = []
+                            for proj in projects:
+                                if proj.get('id') == project_id:
+                                    proj = dict(proj)
+                                    proj['active'] = True
+                                    found = True
+                                updated_projects.append(proj)
+                            if not found:
+                                updated_projects.append({
+                                    'id': project_id,
+                                    'workbench': False,
+                                    'active': True,
+                                    'tags': ""
+                                })
+                            user_ref.update({"projects": updated_projects})
+
+            if "co-authors" in updates: #co author is added, add project to their profile
+                users_id = after["co-authors"]
                 if isinstance(users_id, dict):
                     users_id = list(users_id.values())
                 elif not isinstance(users_id, list):
@@ -239,7 +288,7 @@ def onupdate(event: db_fn.Event) -> None:
                 user_project = {
                     'id': project_id,
                     'workbench': False,
-                    'active': True,
+                    'active': False,
                     'tags': ""
                 }
                 for user_doc in user_docs:
@@ -272,6 +321,7 @@ def onupdate(event: db_fn.Event) -> None:
         
         except Exception as e:
             print(f"Errore in update_tree: {e}")
+
 
 
 
