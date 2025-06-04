@@ -66,8 +66,8 @@ def project_created(event: firestore_fn.Event) -> None:
             "creation-time": timestamp #creation date is stored in firestore
         })
 
-        tree_realtime = object_data.get("tree") #retrieves tree from object event
-        tree=utils.convert_tree_keys(tree)
+        tree = object_data.get("tree") #retrieves tree from object event
+       
 
         last_modified_info = object_data.get("last-modified") #retrieves last modified info from object event
         if not tree:
@@ -98,7 +98,7 @@ def project_created(event: firestore_fn.Event) -> None:
                         "last-modified": data["last-modified"]
                     })
                     db.collection(Collection_name).document(doc_id).update({
-                        "last-edited": data["last-modified"]
+                        "last-edit": data["last-modified"][file_path]["timestamp"]
                     })
                 except GoogleCloudError as e:
                     print(f"Firestore content deletion failed: {e}")
