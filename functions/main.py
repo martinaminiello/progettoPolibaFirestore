@@ -4,6 +4,7 @@ from google.cloud.exceptions import GoogleCloudError
 from google.cloud.firestore_v1 import FieldFilter, ArrayUnion
 from google.cloud.firestore_v1 import DELETE_FIELD
 import utils
+from github import GithubException
 from repomanager import Repository
 import time
 from user import User
@@ -45,45 +46,52 @@ def project_created(event: firestore_fn.Event) -> None:
     doc_ref = db.collection(Collection_name).document(doc_id)
     doc_snapshot = doc_ref.get()
     data = doc_snapshot.to_dict() or {}
-    myuuid = data.get("repo_uuid")
-    if myuuid:
-        print(f"Repository already exists! {myuuid}")
-    else:
+   
 
-        myuuid = str(uuid.uuid4())
-        object_data = event.data.to_dict()
-        repository.create_new_repo(myuuid) #repo name is a unique id
-        repo_url=repository.get_repo_url(myuuid) #build repo url
+    myuuid = str(uuid.uuid4())
+    object_data = event.data.to_dict()
 
-        doc_id = event.params["docId"]
-        db.collection(Collection_name).document(doc_id).update({
-            "repo_uuid": myuuid })  #uuid is stored in firestore
-
-        db.collection(Collection_name).document(doc_id).update({"repo": repo_url})# repo_url is stored in firestore
-
-        timestamp = datetime.datetime.now(datetime.timezone.utc)
-        db.collection(Collection_name).document(doc_id).update({
-            "creation-time": timestamp #creation date is stored in firestore
+    try: #repo creation
+      repository.create_new_repo(myuuid) #repo name is a unique id
+    except GithubException as e:
+        print(f"Status: {e.status}, Error: ", e)
+        if e.status == 422:
+            print(f"Repository already exists!")
+            return 
+        
+    
+    #uuid is stored in firestore
+    repo_url=repository.get_repo_url(myuuid) #build repo url
+    db.collection(Collection_name).document(doc_id).update({
+            "repo_uuid": myuuid })  
+    # repo_url is stored in firestore
+    db.collection(Collection_name).document(doc_id).update({"repo": repo_url})
+    #creation time is generated and stored in firestore
+    timestamp = datetime.datetime.now(datetime.timezone.utc)
+    db.collection(Collection_name).document(doc_id).update({
+            "creation-time": timestamp 
         })
 
-        tree = object_data.get("tree") #retrieves tree from object event
-       
-
-        last_modified_info = object_data.get("last-modified") #retrieves last modified info from object event
-        if not tree:
-            print("No 'tree' found in document.") #user creates project for the first time (so it's empty)
-            return
-
-        file_paths = repository.extract_file_paths(tree) #build all files paths from the tree
-        # delete content and uuid_cache from last_modified_info only if create_tree is successful
-        create_tree_success = True
-        try:
+    #retrieves tree from object event
+    tree = object_data.get("tree") 
+    if not tree:
+        #this can happen when user creates project for the first time (so it's still empty)
+        print("No 'tree' found in document.") 
+        return
+    #retrieves last modified info from object event
+    last_modified_info = object_data.get("last-modified") 
+  
+    #build all files paths from the tree
+    file_paths = repository.extract_file_paths(tree)
+    # delete content and uuid_cache from last_modified_info only if create_tree is successful
+    create_tree_success = True
+    try:
             repository.create_tree(file_paths, myuuid, last_modified_info)
-        except Exception as e:
+    except Exception as e:
             print(f"Errore in create_tree: {e}")
             create_tree_success = False
 
-        if last_modified_info and create_tree_success:
+    if last_modified_info and create_tree_success:
             doc = db.collection(Collection_name).document(doc_id).get()
             data = doc.to_dict() or {}
             if "last-modified" in data and isinstance(data["last-modified"], dict):
@@ -104,7 +112,41 @@ def project_created(event: firestore_fn.Event) -> None:
                     print(f"Firestore content deletion failed: {e}")
 
 
+@firestore_fn.on_document_updated(document="projects/{docId}")
+def project_updated(event: firestore_fn.Event) -> None:
+    print("On project updated triggered")
+    db = firestore.client()
+    Collection_name = "projects"
+    project_id = event.params["docId"]
+    token = ""
+    auth = Auth.Token(token)
+    g = Github(auth=auth)
+    print(f"User f{g.get_user().login}")
+    u = User(token)
+    repository = Repository(u)
+    doc_ref = db.collection(Collection_name).document(project_id)
+    doc_snapshot = doc_ref.get()
+    repo_name = doc_snapshot.get("repo_uuid")
 
+    old_tree = event.data.before.to_dict().get("tree", {})
+    print(f"Old tree: {old_tree}")
+    new_tree = event.data.after.to_dict().get("tree", {})
+    print(f"New tree: {new_tree}")
+
+    new_info=event.data.after.to_dict().get("last-modified", {})
+    print(f"New info: {new_info}")
+    old_info=event.data.before.to_dict().get("last-modified", {})
+    print(f"Old info: {old_info}")
+    
+    has_content=any("content" in v and v["content"] for v in new_info.values())
+    print(f"Has content: {has_content}")
+
+    
+    if new_tree != old_tree or (old_tree is None and new_tree) or has_content:
+
+        repository.update_tree(old_tree, new_tree, repo_name, doc_ref,old_info, new_info) 
+    
+    
 
 
 @firestore_fn.on_document_deleted(document="projects/{docId}")
@@ -145,14 +187,42 @@ def project_deleted(event: firestore_fn.Event) -> None:
 
 @db_fn.on_value_created(reference="/active_projects/{projectId}")
 def oncreate(event: db_fn.Event) -> None:
-    raw_data = event.data # rtdb gives already a dictionary
-    data=utils.convert_tree_keys(raw_data)  # replaces "_" with "." 
-    print(f"Sanitized data: {data}")
-    tree=data.get("tree")
-    print(f"Tree: {tree}")
+    data = event.data # rtdb gives already a dictionary
+    print(f"Data: {data}")
+
+    ###FIRESTORE DOCUMENT CREATION WITH TREE ELABORATION###
+
+    tree_real_time=data.get("tree")
+    tree= utils.convert_tree_keys(tree_real_time)  # replaces "_" with "." in tree
+    print(f"Sanitized tree: {tree}")
+   
+    #Firestore db is initialized 
     db = firestore.client()
     project_id = data['id']
     Collection_name = "projects"
+    doc_ref = db.collection(Collection_name).document(project_id)
+    doc_snapshot = doc_ref.get()
+
+    
+    tree_firestore, last_modified_info = utils.split_tree(tree)
+    print("tree_structure:", tree_firestore)
+    last_modified = utils.insert_last_modified(last_modified_info)  # calcola last_modified prima di usarlo
+    
+    data["last-modified"] = last_modified["last-modified"]  # aggiungi last-modified direttamente a data
+    data["tree"] = tree_firestore  # realtime tree is converted to firestore tree
+    
+    if doc_snapshot.exists:  # if the project document already exists, it will not be created again
+        print(f"Document with ID {project_id} already exists!")
+        return
+    else:
+        try:
+           doc_ref.set(data)  # creates new document with project data
+        except GoogleCloudError as e:
+            print(f"Firestore creation failed: {e}")
+
+
+    ###PROJECT CREATION IN USERS###
+
     users_id = data['co-authors']
     current_authors = data.get('current-authors', [])
     # Ensure users_id and current_authors are lists
@@ -165,28 +235,9 @@ def oncreate(event: db_fn.Event) -> None:
     elif not isinstance(current_authors, list):
         current_authors = [current_authors]
 
-    doc_ref = db.collection(Collection_name).document(project_id)
-    doc_snapshot = doc_ref.get()
-    
-    tree_firestore, last_modified_info = utils.split_tree(tree)
-    print("tree_structure:", tree_firestore)
-    data["tree"] = tree_firestore  # realtime tree is converted to firestore tree
-    last_modified = utils.insert_last_modified(last_modified_info)  # calcola last_modified prima di usarlo
-    data["last-modified"] = last_modified["last-modified"]  # aggiungi last-modified direttamente a data
-
-    if doc_snapshot.exists:  # if the project document already exists, it will not be created again
-        print(f"Document with ID {project_id} already exists!")
-    else:
-        try:
-            db.collection(Collection_name).document(project_id).set(data)  # creates new document with project data
-        except GoogleCloudError as e:
-            print(f"Firestore creation failed: {e}")
-
-    if not isinstance(users_id, list):
-        users_id = [users_id]
-
-    # Unisci co-authors e current-authors per evitare duplicati
+    # union of users_id and current_authors
     all_user_ids = set(users_id) | set(current_authors)
+    # list users documents with the same id of all_user_ids
     user_docs = list(
         db.collection("users")
         .where(filter=FieldFilter("id", "in", list(all_user_ids)))
@@ -233,10 +284,7 @@ def onupdate(event: db_fn.Event) -> None:
     before = event.data.before
     after = event.data.after
 
-  
-
-    
-    
+    #checks if document exists in Firestore
     if not doc_snapshot.exists:
         print(f"Document {project_id} does not exist in Firestore.")
         return
@@ -251,7 +299,8 @@ def onupdate(event: db_fn.Event) -> None:
         try:
             doc_ref.update(updates)
             print(f"Updated simple fields: {updates}")
-          
+            
+            # update "active" field in users documents
             if "current-authors" in updates:
                 before_authors = before.get("current-authors", [])
                 after_authors = after.get("current-authors", [])
@@ -263,9 +312,12 @@ def onupdate(event: db_fn.Event) -> None:
                     after_authors = set(after_authors.values())
                 else:
                     after_authors = set(after_authors)
+                # users that have no longer the project as active
                 not_current_anymore = before_authors - after_authors
+                # users for which the project is now active
                 just_added = after_authors - before_authors
-                if not_current_anymore:
+
+                if not_current_anymore: #"active": False
                     for deleted in not_current_anymore:
                         user_ref = db.collection("users").document(deleted)
                         user_doc = user_ref.get()
@@ -278,7 +330,8 @@ def onupdate(event: db_fn.Event) -> None:
                                     proj['active'] = False
                                 updated_projects.append(proj)
                             user_ref.update({"projects": updated_projects})
-                if just_added:
+
+                if just_added: #"active": True
                     for added in just_added:
                         user_ref = db.collection("users").document(added)
                         user_doc = user_ref.get()
@@ -292,7 +345,7 @@ def onupdate(event: db_fn.Event) -> None:
                                     proj['active'] = True
                                     found = True
                                 updated_projects.append(proj)
-                            if not found:
+                            if not found: # if for some reason project was not created in user profile, it is now
                                 updated_projects.append({
                                     'id': project_id,
                                     'workbench': False,
@@ -300,8 +353,9 @@ def onupdate(event: db_fn.Event) -> None:
                                     'tags': ""
                                 })
                             user_ref.update({"projects": updated_projects})
-
-            if "co-authors" in updates: #co author is added, add project to their profile
+            
+            #if co-authors are updated, add project to their profile
+            if "co-authors" in updates: 
                 users_id = after["co-authors"]
                 if isinstance(users_id, dict):
                     users_id = list(users_id.values())
@@ -334,25 +388,27 @@ def onupdate(event: db_fn.Event) -> None:
     old_tree_realtime = event.data.before.get("tree", {})
     old_tree_structure=utils.split_tree(old_tree_realtime)[0] #split tree to get the structure
     old_tree=utils.convert_tree_keys(old_tree_structure)
-    print(f"Old tree: {old_tree}")
+    print(f"onupdate Old tree: {old_tree}")
     
     new_tree_realtime = event.data.after.get("tree", {})
     new_tree_structure=utils.split_tree(new_tree_realtime)[0] #split tree to get the structure
     new_tree=utils.convert_tree_keys(new_tree_structure)
-    print(f"New tree: {new_tree}")
+    print(f"onupdate New tree: {new_tree}")
 
     old_file_info = utils.split_tree(old_tree_realtime)[1]
     old_file_info_converted = utils.convert_tree_keys(old_file_info) #convert old file info keys to be compatible with firestore
+    print(f"onupdate Old file info: {old_file_info_converted}")
     
     new_file_info = utils.split_tree(new_tree_realtime)[1]
     new_file_info_converted = utils.convert_tree_keys(new_file_info) #convert new file info keys to be compatible with firestore
+    print(f"onupdate New file info: {new_file_info_converted}")
     
     doc_snapshot = doc_ref.get()
     #update tree only for added or removed files
     if before.get("tree") != after.get("tree"):
        
         try:
-            repository.update_tree(old_tree, new_tree, repo_name, doc_ref, old_file_info_converted, new_file_info_converted)
+            repository.update_firestore(old_tree, new_tree, repo_name, doc_ref, old_file_info_converted, new_file_info_converted)
         
         except Exception as e:
             print(f"Errore in update_tree: {e}")
