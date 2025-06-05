@@ -141,10 +141,18 @@ def project_updated(event: firestore_fn.Event) -> None:
     has_content=any("content" in v and v["content"] for v in new_info.values())
     print(f"Has content: {has_content}")
 
-    
-    if new_tree != old_tree or (old_tree is None and new_tree) or has_content:
+    cache_docs = db.collection("cache").stream()
+    cache_doc = None
+    for doc in cache_docs:
+        cache_doc = doc  #if there is ONLY ONE DOCUMENT, which should be the case
 
-        repository.update_tree(old_tree, new_tree, repo_name, doc_ref,old_info, new_info) 
+    if cache_doc:
+        cache_dict = cache_doc.to_dict().get
+    else:
+        print("No cache document found.")
+
+    
+    repository.update_tree(old_tree, new_tree, repo_name, doc_ref,old_info, new_info, cache_doc) 
     
     
 
@@ -404,11 +412,23 @@ def onupdate(event: db_fn.Event) -> None:
     print(f"onupdate New file info: {new_file_info_converted}")
     
     doc_snapshot = doc_ref.get()
-    #update tree only for added or removed files
+    #update tree  for added or removed files and for modified content
+
+    cache_docs = db.collection("cache").stream()
+    cache_doc = None
+    for doc in cache_docs:
+        cache_doc = doc  #if there is ONLY ONE DOCUMENT, which should be the case
+
+    if cache_doc:
+        cache_dict = cache_doc.to_dict()
+    else:
+        print("No cache document found.")
+        
+
     if before.get("tree") != after.get("tree"):
        
         try:
-            repository.update_firestore(old_tree, new_tree, repo_name, doc_ref, old_file_info_converted, new_file_info_converted)
+            repository.update_firestore(old_tree, new_tree, repo_name, doc_ref, old_file_info_converted, new_file_info_converted, cache_doc)
         
         except Exception as e:
             print(f"Errore in update_tree: {e}")
