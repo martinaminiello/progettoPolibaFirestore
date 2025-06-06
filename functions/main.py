@@ -364,14 +364,33 @@ def onupdate(event: db_fn.Event) -> None:
             
             #if co-authors are updated, add project to their profile
             if "co-authors" in updates: 
-                users_id = after["co-authors"]
-                if isinstance(users_id, dict):
-                    users_id = list(users_id.values())
-                elif not isinstance(users_id, list):
-                    users_id = [users_id]
+                co_authors_id = after["co-authors"]
+                if isinstance(co_authors_id, dict):
+                    co_authors_id = list(co_authors_id.values())
+                elif not isinstance(co_authors_id, list):
+                    users_co_authors_idid = [co_authors_id]
+
+                # find removed co-authors
+                before_coauthors = before.get("co-authors", [])
+                if isinstance(before_coauthors, dict):
+                    before_coauthors = list(before_coauthors.values())
+                elif not isinstance(before_coauthors, list):
+                    before_coauthors = [before_coauthors]
+                removed_coauthors = set(before_coauthors) - set(co_authors_id)
+                # remove project from removed co-authors
+                for removed_id in removed_coauthors:
+                    user_ref = db.collection("users").document(removed_id)
+                    user_doc = user_ref.get()
+                    if user_doc.exists:
+                        projects = user_doc.get("projects") or []
+                        updated_projects = [proj for proj in projects if proj.get('id') != project_id]
+                        user_ref.update({"projects": updated_projects})
+                        print(f"Removed project {project_id} from {removed_id}.")
+
+                # add project to new co-authors
                 user_docs = list(
                     db.collection("users")
-                    .where(filter=FieldFilter("id", "in", users_id))
+                    .where(filter=FieldFilter("id", "in", co_authors_id)) #streams users that are in co-authors
                     .stream()
                 )
                 user_project = {

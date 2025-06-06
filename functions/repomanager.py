@@ -380,9 +380,7 @@ class Repository:
                     "timestamp": timestamp
                 }
                 
-                update_cache_in_progress(cache_doc, uuid_cache, content)
                 
-
                 try:
                     doc_ref.update({
                         "last-edit": data["last-modified"][path]["timestamp"]
