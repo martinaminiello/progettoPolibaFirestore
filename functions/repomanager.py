@@ -1,6 +1,7 @@
 import os
 import uuid
 import datetime
+import time
 from github import GithubException
 from google.cloud.exceptions import GoogleCloudError
 from google.cloud.firestore_v1 import DELETE_FIELD
@@ -94,57 +95,138 @@ def put_in_queue(uuid_cache,path, content, cache_doc):
                         })
 
 
-def manage_conflicts_cache(cache_doc, uuid_cache, content, path):
-    cache_data = cache_doc.to_dict()
-    queue_items = cache_doc.to_dict().get("queue_item", [])
-    content = None
-    for item in queue_items:
-        if isinstance(item, dict) and item.get("uuid_cache") == uuid_cache:
-            content = item.get("content")
-            break
 
 def process_queue(repo, cache_doc):
+    MAX_ATTEMPTS = 5
+
+    # Refresh Firestore snapshot at the start
+    cache_doc = cache_doc.reference.get()
     data = cache_doc.to_dict()
     push_queue = data.get("queue", [])
     queue_items = data.get("queue_item", [])
     updated_uuids = []
 
-    new_push_queue = []
-    new_queue_items = []
+    # Early exit if queue is empty or no in-queue items
+    if not push_queue or not any(item.get("push_status") == "in-queue" for item in queue_items):
+        print("Queue is empty or no in-queue items. Exiting process_queue.")
+        return
 
-    for item in push_queue:
+    for item in list(push_queue):
         uuid_cache = item.get("uuid_cache")
         path = item.get("path")
 
+        # Trova l'entry corrispondente in queue_items
         queue_entry = next((i for i in queue_items if i.get("uuid_cache") == uuid_cache), None)
         if not queue_entry:
             continue
+
+        # Retry logic: check attempts
+        attempts = queue_entry.get("attempts", 0)
+        if queue_entry.get("push_status") == "failed" or attempts >= MAX_ATTEMPTS:
+            # Mark as failed if not already
+            if queue_entry.get("push_status") != "failed":
+                failed_item = dict(queue_entry)
+                failed_item["push_status"] = "failed"
+                cache_doc.reference.update({
+                    "queue_item": ArrayRemove([queue_entry])
+                })
+                cache_doc.reference.update({
+                    "queue_item": ArrayUnion([failed_item])
+                })
+            # Remove from push_queue
+            cache_doc.reference.update({
+                "queue": ArrayRemove([item])
+            })
+            continue
+
+        # Aggiorna lo status a in-progress su Firestore se era in-queue
+        if queue_entry.get("push_status") == "in-queue":
+            old_entry = dict(queue_entry)
+            queue_entry = dict(queue_entry)
+            queue_entry["push_status"] = "in-progress"
+            queue_entry["attempts"] = attempts + 1
+            cache_doc.reference.update({
+                "queue_item": ArrayRemove([old_entry])
+            })
+            cache_doc.reference.update({
+                "queue_item": ArrayUnion([queue_entry])
+            })
+            cache_doc.reference.update({
+                "queue": ArrayRemove([item])
+            })
 
         content = queue_entry.get("content")
 
         try:
             file = repo.get_contents(path)
             repo.update_file(file.path, f"Queued update {path}, version {uuid_cache}", content or "", file.sha)
-
-            print(f"✅ Completato dalla coda: {path}")
+            print(f"✅ Push dalla coda avvenuto con successo: {path} for content {content}")
             updated_uuids.append(uuid_cache)
-
+            # Remove from queue_item after success
+            cache_doc.reference.update({
+                "queue_item": ArrayRemove([queue_entry])
+            })
         except GithubException as e:
             if e.status == 409:
                 print(f"⚠️ Conflitto SHA per {path}, lascio in coda.")
-                new_push_queue.append(item)
-                new_queue_items.append(queue_entry)
+                # Incrementa attempts
+                if attempts + 1 >= MAX_ATTEMPTS:
+                    failed_item = dict(queue_entry)
+                    failed_item["push_status"] = "failed"
+                    cache_doc.reference.update({
+                        "queue_item": ArrayRemove([queue_entry])
+                    })
+                    cache_doc.reference.update({
+                        "queue_item": ArrayUnion([failed_item])
+                    })
+                else:
+                    # Ritardo solo se ci sono altri item con stesso path ma uuid diverso
+                    other_same_path = any(
+                        (isinstance(q, dict) and q.get("path") == path and q.get("uuid_cache") != uuid_cache)
+                        for q in queue_items
+                    )
+                    if other_same_path:
+                        delay = min(2 ** (attempts + 1), 5)  # max 30 secondi
+                        print(f"⏳ Attendo {delay} secondi prima di riprovare {path} (tentativo {attempts + 1}) perché ci sono altri commit concorrenti su questo file.")
+                        time.sleep(delay)
+                    # Rimetti in coda con attempts incrementato
+                    new_entry = dict(queue_entry)
+                    new_entry["push_status"] = "in-queue"
+                    new_entry["attempts"] = attempts + 1
+                    cache_doc.reference.update({
+                        "queue_item": ArrayRemove([queue_entry])
+                    })
+                    cache_doc.reference.update({
+                        "queue_item": ArrayUnion([new_entry])
+                    })
+                    cache_doc.reference.update({
+                        "queue": ArrayUnion([item])
+                    })
             else:
                 print(f"❌ Errore generico per {path}: {e}")
-                failed_status(True, queue_entry, cache_doc)
+                # Mark as failed if max attempts reached
+                if attempts + 1 >= MAX_ATTEMPTS:
+                    failed_item = dict(queue_entry)
+                    failed_item["push_status"] = "failed"
+                    cache_doc.reference.update({
+                        "queue_item": ArrayRemove([queue_entry])
+                    })
+                    cache_doc.reference.update({
+                        "queue_item": ArrayUnion([failed_item])
+                    })
+                else:
+                    failed_status(True, queue_entry, cache_doc)
 
-    # Aggiorna cache con nuova coda filtrata
-    cache_doc.reference.update({
-        "queue": new_push_queue,
-        "queue_item": new_queue_items
-    })
-
-
+    # Refresh Firestore snapshot at the end
+    cache_doc = cache_doc.reference.get()
+    data = cache_doc.to_dict()
+    push_queue = data.get("queue", [])
+    queue_items = data.get("queue_item", [])
+    # Only recurse if there are still in-queue items
+    if push_queue and any(item.get("push_status") == "in-queue" for item in queue_items):
+        process_queue(repo, cache_doc)
+    else:
+        print("Queue processing complete. No more in-queue items.")
 
 class Repository:
 
@@ -310,12 +392,13 @@ class Repository:
                 
             
             try: 
-                
+                print(f"Updating Firestore document with {data['tree']} and {data['last-modified']}")
                 # update the Firestore document with the new tree and last-modified info
                 doc_ref.update({
                     "tree": data["tree"],
                     "last-modified": data["last-modified"]
                 })
+                print(f"Firestore document updated successfully for {repo_name}")
                 
 
             except GoogleCloudError as e:
@@ -419,7 +502,7 @@ class Repository:
             try:
                 repo.create_file(path, f"Add {path},  version {uuid_cache}", content or "")
                 print(f"Added: {path}")
-                cache_doc.get()
+                cache_doc = cache_doc.reference.get()
 
                 added_success.add(path)
             except GithubException as e:
@@ -442,12 +525,12 @@ class Repository:
 
         for path in modified:
             file_info = new_info.get(path, {})
-            uuid_cache = file_info.get("uuid_cache", "")
+            uuid_cache = file_info.get("uuid_cache", "") #takes uuid_cache from last-modified
             content = None
             found_in_queue = False
 
             for item in queue_items:
-                if isinstance(item, dict) and item.get("uuid_cache") == uuid_cache:
+                if isinstance(item, dict) and item.get("uuid_cache") == uuid_cache: #makes sure to find the item in the queue with the same uuid_cache
                     content = item.get("content")
                     found_in_queue = True
                     break
@@ -455,24 +538,24 @@ class Repository:
             if found_in_queue:  # it means content was modified and should be pushed
 
                 already_updated_same_path = any(
-                    entry["path"] == path and entry["uuid_cache"] != uuid_cache
+                    entry["path"] == path and entry["uuid_cache"] != uuid_cache #if for the same path there are more uuids it means there is a conflict
                     for entry in updated_uuids
                 )
 
                 if already_updated_same_path:
                     print(f"⏸ File {path} è stato aggiornato di recente. Inserisco in coda.")
                     # Inserisci nella queue e queue_item
-                    put_in_queue(uuid_cache, path, content, cache_doc)
+                    put_in_queue(uuid_cache, path, content, cache_doc) #put in queue
                     continue
 
                 try:
                     file = repo.get_contents(path)
-                    print(f"1-File.sha: {file.sha}")
+                    print(f"Pushing: {content}")
                     repo.update_file(file.path, f"Update {path}, version {uuid_cache}", content or "", file.sha)
 
                     updated_uuids.append({"uuid_cache": uuid_cache, "path": path})
                     print(f"2-File.sha: {file.sha}")
-                    print(f" Push completata: {path}")
+                    print(f" ✅ Push completata: {path} for content {content}")
            
                     # Rimuovi dalla cache una volta pushato
                   
@@ -482,12 +565,19 @@ class Repository:
 
                     # Se errore di tipo 409 (SHA mismatch), metti in coda
                     if e.status == 409:
-                        print(f" Conflitto SHA su {path}, inserisco in coda.")
+                        print(f" Conflitto SHA su {path} for {content}, inserisco in coda.")
                         put_in_queue(uuid_cache, path, content, cache_doc)
                        
                     else:
                         failed_status(found_in_queue, item, cache_doc)
                 remove_from_cache(cache_doc, uuid_cache)
+
+                # Refresh cache_doc to get the latest state from Firestore
+                doc_snapshot = cache_doc.reference.get()
+                queue_items = doc_snapshot.to_dict().get("queue_item", [])
+                in_queue = list(queue_items)
+                print(f"Queue items after removal of in progress: {in_queue}")
+                process_queue(repo, doc_snapshot)
 
 
 
