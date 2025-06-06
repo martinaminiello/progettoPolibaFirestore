@@ -30,23 +30,16 @@ def remove_path_from_tree(tree, path):
             return  # path not found
     d.pop(parts[-1], None)
 
-def remove_from_cache(cache_doc, uuid_cache=None, path=None):
-    queue_items = cache_doc.to_dict().get("queue_item", [])
-    # Rimuovi tutti gli item con push_status 'done' (per path se specificato, altrimenti tutti)
-    print(f"items in queue_item before removal: {queue_items}")
-    to_remove = [item for item in queue_items if isinstance(item, dict) and item.get("push_status") == "in-progress"]
-    if to_remove:
-        print("Sto rimuovendo da queue_item:", to_remove)
-        cache_doc.reference.update({
-            "queue_item": ArrayRemove(to_remove)
-        })
 
-def update_cache_in_progress(cache_doc, uuid_cache, content): #from real-time is always in progress
+
+def update_cache_in_progress(cache_doc, uuid_cache, content, path, timestamp): #from real-time is always in progress
     try:
         cache_doc.reference.update({
             "queue_item": ArrayUnion([{
                 "uuid_cache": uuid_cache,
+                "path": path,
                 "content": content,
+                "timestamp": timestamp,
                 "push_status": "in-progress"
             }]),
            
@@ -54,179 +47,28 @@ def update_cache_in_progress(cache_doc, uuid_cache, content): #from real-time is
     except GoogleCloudError as e:
         print(f"Firestore update failed: {e}")
 
-def failed_status(found_in_queue, item, cache_doc):
+def failed_status(item, cache_doc):
 
-    if found_in_queue and item:
-        failed_item = dict(item)
-        failed_item["push_status"] = "failed"
-        cache_doc.reference.update({
-            "queue_item": ArrayRemove([item])
+        print(f"Failed to push item: {item}")
+        # if it's a list update all items in the list
+        if isinstance(item, list):
+            items = item
+        else:
+            items = [item]
+        for it in items:
+            failed_item = dict(it)
+            failed_item["push_status"] = "failed"
+            cache_doc.reference.update({
+                "queue_item": ArrayRemove([it])
                         })
-        cache_doc.reference.update({
-            "queue_item": ArrayUnion([failed_item])
+            cache_doc.reference.update({
+                "queue_item": ArrayUnion([failed_item])
                         })
          # TO DO: RETRY LOGIC
 
 
-def put_in_queue(uuid_cache,path, content, cache_doc):
-     # remove duplicates from queue and queue_item
-
-    queue_items = cache_doc.to_dict().get("queue_item", [])
-    push_queue = cache_doc.to_dict().get("queue", [])
-    queue_items = [item for item in queue_items if item.get("uuid_cache") != uuid_cache]
-    push_queue = [item for item in push_queue if item.get("uuid_cache") != uuid_cache]
-
-     # update
-    push_queue.append({
-        "uuid_cache": uuid_cache,
-        "path": path
-                        })
-    queue_items.append({
-            "uuid_cache": uuid_cache,
-            "path": path,
-            "content": content,
-            "push_status": "in-queue",
-                        })
-
-    # save in document
-    cache_doc.reference.update({
-            "queue": push_queue,
-            "queue_item": queue_items
-                        })
 
 
-
-def process_queue(repo, cache_doc):
-    MAX_ATTEMPTS = 5
-
-    # Refresh Firestore snapshot at the start
-    cache_doc = cache_doc.reference.get()
-    data = cache_doc.to_dict()
-    push_queue = data.get("queue", [])
-    queue_items = data.get("queue_item", [])
-    updated_uuids = []
-
-    # Early exit if queue is empty or no in-queue items
-    if not push_queue or not any(item.get("push_status") == "in-queue" for item in queue_items):
-        print("Queue is empty or no in-queue items. Exiting process_queue.")
-        return
-
-    for item in list(push_queue):
-        uuid_cache = item.get("uuid_cache")
-        path = item.get("path")
-
-        # Trova l'entry corrispondente in queue_items
-        queue_entry = next((i for i in queue_items if i.get("uuid_cache") == uuid_cache), None)
-        if not queue_entry:
-            continue
-
-        # Retry logic: check attempts
-        attempts = queue_entry.get("attempts", 0)
-        if queue_entry.get("push_status") == "failed" or attempts >= MAX_ATTEMPTS:
-            # Mark as failed if not already
-            if queue_entry.get("push_status") != "failed":
-                failed_item = dict(queue_entry)
-                failed_item["push_status"] = "failed"
-                cache_doc.reference.update({
-                    "queue_item": ArrayRemove([queue_entry])
-                })
-                cache_doc.reference.update({
-                    "queue_item": ArrayUnion([failed_item])
-                })
-            # Remove from push_queue
-            cache_doc.reference.update({
-                "queue": ArrayRemove([item])
-            })
-            continue
-
-        # Aggiorna lo status a in-progress su Firestore se era in-queue
-        if queue_entry.get("push_status") == "in-queue":
-            old_entry = dict(queue_entry)
-            queue_entry = dict(queue_entry)
-            queue_entry["push_status"] = "in-progress"
-            queue_entry["attempts"] = attempts + 1
-            cache_doc.reference.update({
-                "queue_item": ArrayRemove([old_entry])
-            })
-            cache_doc.reference.update({
-                "queue_item": ArrayUnion([queue_entry])
-            })
-            cache_doc.reference.update({
-                "queue": ArrayRemove([item])
-            })
-
-        content = queue_entry.get("content")
-
-        try:
-            file = repo.get_contents(path)
-            repo.update_file(file.path, f"Queued update {path}, version {uuid_cache}", content or "", file.sha)
-            print(f"✅ Push dalla coda avvenuto con successo: {path} for content {content}")
-            updated_uuids.append(uuid_cache)
-            # Remove from queue_item after success
-            cache_doc.reference.update({
-                "queue_item": ArrayRemove([queue_entry])
-            })
-        except GithubException as e:
-            if e.status == 409:
-                print(f"⚠️ Conflitto SHA per {path}, lascio in coda.")
-                # Incrementa attempts
-                if attempts + 1 >= MAX_ATTEMPTS:
-                    failed_item = dict(queue_entry)
-                    failed_item["push_status"] = "failed"
-                    cache_doc.reference.update({
-                        "queue_item": ArrayRemove([queue_entry])
-                    })
-                    cache_doc.reference.update({
-                        "queue_item": ArrayUnion([failed_item])
-                    })
-                else:
-                    # Ritardo solo se ci sono altri item con stesso path ma uuid diverso
-                    other_same_path = any(
-                        (isinstance(q, dict) and q.get("path") == path and q.get("uuid_cache") != uuid_cache)
-                        for q in queue_items
-                    )
-                    if other_same_path:
-                        delay = min(2 ** (attempts + 1), 5)  # max 30 secondi
-                        print(f"⏳ Attendo {delay} secondi prima di riprovare {path} (tentativo {attempts + 1}) perché ci sono altri commit concorrenti su questo file.")
-                        time.sleep(delay)
-                    # Rimetti in coda con attempts incrementato
-                    new_entry = dict(queue_entry)
-                    new_entry["push_status"] = "in-queue"
-                    new_entry["attempts"] = attempts + 1
-                    cache_doc.reference.update({
-                        "queue_item": ArrayRemove([queue_entry])
-                    })
-                    cache_doc.reference.update({
-                        "queue_item": ArrayUnion([new_entry])
-                    })
-                    cache_doc.reference.update({
-                        "queue": ArrayUnion([item])
-                    })
-            else:
-                print(f"❌ Errore generico per {path}: {e}")
-                # Mark as failed if max attempts reached
-                if attempts + 1 >= MAX_ATTEMPTS:
-                    failed_item = dict(queue_entry)
-                    failed_item["push_status"] = "failed"
-                    cache_doc.reference.update({
-                        "queue_item": ArrayRemove([queue_entry])
-                    })
-                    cache_doc.reference.update({
-                        "queue_item": ArrayUnion([failed_item])
-                    })
-                else:
-                    failed_status(True, queue_entry, cache_doc)
-
-    # Refresh Firestore snapshot at the end
-    cache_doc = cache_doc.reference.get()
-    data = cache_doc.to_dict()
-    push_queue = data.get("queue", [])
-    queue_items = data.get("queue_item", [])
-    # Only recurse if there are still in-queue items
-    if push_queue and any(item.get("push_status") == "in-queue" for item in queue_items):
-        process_queue(repo, cache_doc)
-    else:
-        print("Queue processing complete. No more in-queue items.")
 
 class Repository:
 
@@ -309,7 +151,7 @@ class Repository:
                     print(f"Error creating new file: {path}: {e}")
 
 
-    def update_firestore(self, old_tree, new_tree, repo_name, doc_ref, old_info, new_info, cache_doc):
+    def update_firestore(self, old_tree, new_tree, repo_name, doc_ref, old_info, new_info, cache_doc,timestamp):
             repo = self.get_current_repo(repo_name)
             print(f" update_tree_fireatore: {repo_name} - old_tree: {old_tree}, new_tree: {new_tree}, doc_ref: {doc_ref}, old_info: {old_info}, new_info: {new_info}")
             old_paths = set(self.extract_file_paths(old_tree))
@@ -338,7 +180,7 @@ class Repository:
                 try:
                     # REMOVE path from tree and last-modified
                     remove_path_from_tree(data["tree"], path)
-                    timestamp = datetime.datetime.now(datetime.timezone.utc)
+                 
                     try:
                      doc_ref.update({
                         "last-edit": timestamp
@@ -369,7 +211,7 @@ class Repository:
                     content = file_info.get("content", "")
                     last_modifier = file_info.get("last-modifier", "")
                 uuid_cache = str(uuid.uuid4())
-                timestamp = datetime.datetime.now(datetime.timezone.utc)
+            
                 print(f"Adding file at {path} with content: {repr(content)} and last modifier: {last_modifier}")
                 # Update the tree structure (not on firestore yet)
                 set_nested_dict(data["tree"], path, "")
@@ -406,12 +248,12 @@ class Repository:
             modified = old_paths & new_paths
             for path in modified:
                 if new_info.get(path, {}).get("content") != old_info.get(path, {}).get("content"):
-                    print(f"Modifying file at {path}")
+                    print(f"Modifying file at {path} because content has changed {repr(new_info.get(path, {}).get('content'))}")
                     file_info = new_info.get(path, {})
                     content = file_info.get("content", "")
                     last_modifier = file_info.get("last-modifier", "")
                     uuid_cache = str(uuid.uuid4())
-                    timestamp = datetime.datetime.now(datetime.timezone.utc)
+                 
                     
                     print(f"Modified: {path}")
                     # Update the last-modified info
@@ -421,7 +263,7 @@ class Repository:
                             "timestamp": timestamp
                         }
                     
-                    update_cache_in_progress(cache_doc, uuid_cache, content)
+                    update_cache_in_progress(cache_doc, uuid_cache, content, path, timestamp)
                         
                     try:
                             doc_ref.update({
@@ -469,11 +311,22 @@ class Repository:
         for path in deleted:
             print("To delete: ", path)
             try:
-                file = repo.get_contents(path)
-                repo.delete_file(file.path, f"Remove {path}", file.sha)
-            except GithubException as e:
-                print(f"Error deleting {path}: {e}")
-
+                # REMOVE path from tree and last-modified
+                remove_path_from_tree(data["tree"], path)
+                timestamp = datetime.datetime.now(datetime.timezone.utc)
+                try:
+                 doc_ref.update({
+                    "last-edit": timestamp
+                })
+                except GoogleCloudError as e:
+                    print(f"Firestore update failed for last-edited: {e}")
+            except GoogleCloudError as e:
+                print(f"Unexpected error in Firestore deleting {path}: {e}")
+            
+            #removes paths in last-modified
+            if path in data["last-modified"]:
+                del data["last-modified"][path]
+            print(f"Deleted: {path}")
 
         # ADDED files: files that aren't in old paths
         added = new_paths - old_paths
@@ -509,84 +362,87 @@ class Repository:
                     added_success.add(path)
                 else:
                     print(f"Error creating {path}: {e}")
-                    failed_status(found_in_queue, item, cache_doc)
+                    failed_status(item, cache_doc)
 
-        # REMOVE CURRENT FILE THAT HAS JUST BEEN PUSHED
-            remove_from_cache(cache_doc, uuid_cache)
 
         
 # MODIFIED files: files that are in both old and new paths
-        updated_uuids = []
-        push_queue = cache_doc.to_dict().get("queue", [])
+      
+        cache_doc = cache_doc.reference.get()
         queue_items = cache_doc.to_dict().get("queue_item", [])
         modified = old_paths & new_paths
 
         for path in modified:
-            file_info = new_info.get(path, {})
-            uuid_cache = file_info.get("uuid_cache", "") #takes uuid_cache from last-modified
-            content = None
-            found_in_queue = False
+            path_items = [item for item in queue_items if item.get("path") == path]
+            if not path_items:
+                continue
+            last_item = max(path_items, key=lambda x: x.get("timestamp", 0))
+            old_items = [item for item in path_items if item != last_item]
+            print(f"last_item: {last_item}")
+            updated_items = []
+            failed_items=[]
+            try:
+                content = last_item.get("content")
+                file = repo.get_contents(path)
+                print(f"Pushing: {content}")
+                repo.update_file(file.path, f"Update {path}, version {last_item.get('uuid_cache')}", content or "", file.sha)
+                print(f" ✅ Push completed: {path} for content {content}")
+                success_item = dict(last_item)
+                success_item["push_status"] = "success"
+                updated_items.append(success_item)
+                for old in old_items:
+                    failed_item = dict(old)
+                    failed_item["push_status"] = "failed"
+                    updated_items.append(failed_item)
+            except GithubException as e:
+                print(f" Error pushing {path}: {e}")
+                if e.status == 409:
+                    try:
+                        file = repo.get_contents(path)
+                        repo.update_file(file.path, f"Force update {path}, version {last_item.get('uuid_cache')}", content or "", file.sha)
+                        print(f" ✅ Forced push completed: {path} for content {content}")
+                        success_item = dict(last_item)
+                        success_item["push_status"] = "success"
+                        updated_items.append(success_item)
+                        for old in old_items:
+                            failed_item = dict(old)
+                            failed_item["push_status"] = "failed"
+                            failed_items.append(failed_item)
+                    except Exception as e2:
+                        print(f"Error forcing remote content after SHA conflict: {e2}")
+                        failed_item = dict(last_item)
+                        failed_item["push_status"] = "failed"
+                        updated_items.append(failed_item)
+                        for old in old_items:
+                            failed_item = dict(old)
+                            failed_item["push_status"] = "failed"
+                            failed_items.append(failed_item)
+                else:
+                    failed_item = dict(last_item)
+                    failed_item["push_status"] = "failed"
+                    updated_items.append(failed_item)
+                    for old in old_items:
+                        failed_item = dict(old)
+                        failed_item["push_status"] = "failed"
+                        failed_items.append(failed_item)
+      
+            cache_doc = cache_doc.reference.get()
+            queue_items = cache_doc.to_dict().get("queue_item", [])
+            to_remove = [item for item in queue_items if isinstance(item, dict) and item.get("path") == path]
+            print(f"Removing all items from queue with path {path}: {to_remove}")
+            if to_remove:
+                cache_doc.reference.update({"queue_item": ArrayRemove(to_remove)})
 
-            for item in queue_items:
-                if isinstance(item, dict) and item.get("uuid_cache") == uuid_cache: #makes sure to find the item in the queue with the same uuid_cache
-                    content = item.get("content")
-                    found_in_queue = True
-                    break
-
-            if found_in_queue:  # it means content was modified and should be pushed
-
-                already_updated_same_path = any(
-                    entry["path"] == path and entry["uuid_cache"] != uuid_cache #if for the same path there are more uuids it means there is a conflict
-                    for entry in updated_uuids
-                )
-
-                if already_updated_same_path:
-                    print(f"⏸ File {path} è stato aggiornato di recente. Inserisco in coda.")
-                    # Inserisci nella queue e queue_item
-                    put_in_queue(uuid_cache, path, content, cache_doc) #put in queue
-                    continue
-
-                try:
-                    file = repo.get_contents(path)
-                    print(f"Pushing: {content}")
-                    repo.update_file(file.path, f"Update {path}, version {uuid_cache}", content or "", file.sha)
-
-                    updated_uuids.append({"uuid_cache": uuid_cache, "path": path})
-                    print(f"2-File.sha: {file.sha}")
-                    print(f" ✅ Push completata: {path} for content {content}")
-           
-                    # Rimuovi dalla cache una volta pushato
-                  
-
-                except GithubException as e:
-                    print(f" Errore aggiornando {path}: {e}")
-
-                    # Se errore di tipo 409 (SHA mismatch), metti in coda
-                    if e.status == 409:
-                        print(f" Conflitto SHA su {path} for {content}, inserisco in coda.")
-                        put_in_queue(uuid_cache, path, content, cache_doc)
-                       
-                    else:
-                        failed_status(found_in_queue, item, cache_doc)
-                remove_from_cache(cache_doc, uuid_cache)
-
-                # Refresh cache_doc to get the latest state from Firestore
-                doc_snapshot = cache_doc.reference.get()
-                queue_items = doc_snapshot.to_dict().get("queue_item", [])
-                in_queue = list(queue_items)
-                print(f"Queue items after removal of in progress: {in_queue}")
-                process_queue(repo, doc_snapshot)
-
-
-
+            print(f"Pushed items: {updated_items}")
+            print(f"Failed, cancelled commits: {failed_items}")
+            
         
-        # update the last-modified info
-        try:
-            doc_ref.update({
-                "last-modified": data["last-modified"]
-            })
-        except GoogleCloudError as e:
-            print(f"Firestore update failed: {e}")
+            doc_snapshot = cache_doc.reference.get()
+            queue_items = doc_snapshot.to_dict().get("queue_item", [])
+            in_queue = list(queue_items)
+       
+
+
 
 
 

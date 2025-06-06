@@ -138,9 +138,7 @@ def project_updated(event: firestore_fn.Event) -> None:
     old_info=event.data.before.to_dict().get("last-modified", {})
     print(f"Old info: {old_info}")
     
-    has_content=any("content" in v and v["content"] for v in new_info.values())
-    print(f"Has content: {has_content}")
-
+ 
     cache_docs = db.collection("cache").stream()
     cache_doc = None
     for doc in cache_docs:
@@ -288,7 +286,8 @@ def onupdate(event: db_fn.Event) -> None:
     doc_ref = db.collection(Collection_name).document(project_id)
     doc_snapshot = doc_ref.get()
     repo_name = doc_snapshot.get("repo_uuid")
-
+    time=event.time
+    print(f"TIME : {time}")
     before = event.data.before
     after = event.data.after
 
@@ -447,7 +446,7 @@ def onupdate(event: db_fn.Event) -> None:
     if before.get("tree") != after.get("tree"):
        
         try:
-            repository.update_firestore(old_tree, new_tree, repo_name, doc_ref, old_file_info_converted, new_file_info_converted, cache_doc)
+            repository.update_firestore(old_tree, new_tree, repo_name, doc_ref, old_file_info_converted, new_file_info_converted, cache_doc, time)
         
         except Exception as e:
             print(f"Errore in update_tree: {e}")
