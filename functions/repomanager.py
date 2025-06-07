@@ -366,8 +366,8 @@ class Repository:
 
 
         
-# MODIFIED files: files that are in both old and new paths
-      
+
+        # MODIFIED files: files that are in both old and new paths
         cache_doc = cache_doc.reference.get()
         queue_items = cache_doc.to_dict().get("queue_item", [])
         modified = old_paths & new_paths
@@ -380,36 +380,66 @@ class Repository:
             old_items = [item for item in path_items if item != last_item]
             print(f"last_item: {last_item}")
             updated_items = []
-            failed_items=[]
-            try:
-                content = last_item.get("content")
-                file = repo.get_contents(path)
-                print(f"Pushing: {content}")
-                repo.update_file(file.path, f"Update {path}, version {last_item.get('uuid_cache')}", content or "", file.sha)
-                print(f" ✅ Push completed: {path} for content {content}")
-                success_item = dict(last_item)
-                success_item["push_status"] = "success"
-                updated_items.append(success_item)
-                for old in old_items:
-                    failed_item = dict(old)
-                    failed_item["push_status"] = "failed"
-                    updated_items.append(failed_item)
-            except GithubException as e:
-                print(f" Error pushing {path}: {e}")
-                if e.status == 409:
-                    try:
-                        file = repo.get_contents(path)
-                        repo.update_file(file.path, f"Force update {path}, version {last_item.get('uuid_cache')}", content or "", file.sha)
-                        print(f" ✅ Forced push completed: {path} for content {content}")
-                        success_item = dict(last_item)
-                        success_item["push_status"] = "success"
-                        updated_items.append(success_item)
-                        for old in old_items:
-                            failed_item = dict(old)
+            failed_items = []
+            content = last_item.get("content")
+            max_retries = 3
+            success = False
+            for attempt in range(max_retries):
+                try:
+                    file = repo.get_contents(path)
+                    print(f"Pushing: {content} (attempt {attempt+1})")
+                    repo.update_file(
+                        file.path,
+                        f"Update {path}, version {last_item.get('uuid_cache')}",
+                        content or "",
+                        file.sha
+                    )
+                    print(f" ✅ Push completed: {path} for content {content}")
+                    success_item = dict(last_item)
+                    success_item["push_status"] = "success"
+                    updated_items.append(success_item)
+                    for old in old_items:
+                        failed_item = dict(old)
+                        failed_item["push_status"] = "failed"
+                        updated_items.append(failed_item)
+                    success = True
+                    break
+                except GithubException as e:
+                    print(f" Error pushing {path}: {e}")
+                    if e.status == 409 and attempt < max_retries - 1:
+                        print("SHA conflict, retrying after delay...")
+                        time.sleep(2)  
+                        continue  
+                    elif e.status == 409:
+                        try:
+                            file = repo.get_contents(path)
+                            repo.update_file(
+                                file.path,
+                                f"Force update {path}, version {last_item.get('uuid_cache')}",
+                                content or "",
+                                file.sha
+                            )
+                            print(f" ✅ Forced push completed: {path} for content {content}")
+                            success_item = dict(last_item)
+                            success_item["push_status"] = "success"
+                            updated_items.append(success_item)
+                            for old in old_items:
+                                failed_item = dict(old)
+                                failed_item["push_status"] = "failed"
+                                failed_items.append(failed_item)
+                            success = True
+                            break
+                        except Exception as e2:
+                            print(f"Error forcing remote content after SHA conflict: {e2}")
+                            failed_item = dict(last_item)
                             failed_item["push_status"] = "failed"
-                            failed_items.append(failed_item)
-                    except Exception as e2:
-                        print(f"Error forcing remote content after SHA conflict: {e2}")
+                            updated_items.append(failed_item)
+                            for old in old_items:
+                                failed_item = dict(old)
+                                failed_item["push_status"] = "failed"
+                                failed_items.append(failed_item)
+                            break
+                    else:
                         failed_item = dict(last_item)
                         failed_item["push_status"] = "failed"
                         updated_items.append(failed_item)
@@ -417,15 +447,8 @@ class Repository:
                             failed_item = dict(old)
                             failed_item["push_status"] = "failed"
                             failed_items.append(failed_item)
-                else:
-                    failed_item = dict(last_item)
-                    failed_item["push_status"] = "failed"
-                    updated_items.append(failed_item)
-                    for old in old_items:
-                        failed_item = dict(old)
-                        failed_item["push_status"] = "failed"
-                        failed_items.append(failed_item)
-      
+                        break
+
             cache_doc = cache_doc.reference.get()
             queue_items = cache_doc.to_dict().get("queue_item", [])
             to_remove = [item for item in queue_items if isinstance(item, dict) and item.get("path") == path]
@@ -435,11 +458,11 @@ class Repository:
 
             print(f"Pushed items: {updated_items}")
             print(f"Failed, cancelled commits: {failed_items}")
+
             
         
-            doc_snapshot = cache_doc.reference.get()
-            queue_items = doc_snapshot.to_dict().get("queue_item", [])
-            in_queue = list(queue_items)
+
+    
        
 
 
