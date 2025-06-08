@@ -6,6 +6,7 @@ from google.cloud.firestore_v1 import DELETE_FIELD
 import utils
 from github import GithubException
 from repomanager import Repository
+import repomanager
 import time
 from user import User
 from firebase_admin import initialize_app, firestore, credentials
@@ -31,17 +32,11 @@ if not firebase_admin._apps:
 @firestore_fn.on_document_created(document="projects/{docId}")
 def project_created(event: firestore_fn.Event) -> None:
     print("On project created triggered")
+    
+    repository=utils.initialized_repo()
+
     db = firestore.client()
     Collection_name = "projects"
-    # remember to also change the path in cloud functions parameter(document="current_projects/{docId}"
-    # github authentication
-    token = ""
-    auth = Auth.Token(token)
-    g = Github(auth=auth)
-    print(f"User {g.get_user().login}")
-    u = User(token)
-    repository = Repository(u)
-
     doc_id = event.params["docId"]
     doc_ref = db.collection(Collection_name).document(doc_id)
     doc_snapshot = doc_ref.get()
@@ -85,8 +80,12 @@ def project_created(event: firestore_fn.Event) -> None:
     file_paths = repository.extract_file_paths(tree)
     # delete content and uuid_cache from last_modified_info only if create_tree is successful
     create_tree_success = True
+    cache_doc= utils.create_cache_doc(db)
+    if not cache_doc:
+        print("Nessun documento cache trovato! Impossibile procedere.")
+        return
     try:
-            repository.create_tree(file_paths, myuuid, last_modified_info)
+            repository.create_tree(file_paths, myuuid, last_modified_info, cache_doc)
     except Exception as e:
             print(f"Errore in create_tree: {e}")
             create_tree_success = False
@@ -99,8 +98,7 @@ def project_created(event: firestore_fn.Event) -> None:
                     if file_path in data["last-modified"]:
                         if "content" in data["last-modified"][file_path]:
                             del data["last-modified"][file_path]["content"]
-                        if "uuid_cache" in data["last-modified"][file_path]:
-                            del data["last-modified"][file_path]["uuid_cache"]
+                     
                 try:
                     db.collection(Collection_name).document(doc_id).update({
                         "last-modified": data["last-modified"]
@@ -115,15 +113,12 @@ def project_created(event: firestore_fn.Event) -> None:
 @firestore_fn.on_document_updated(document="projects/{docId}")
 def project_updated(event: firestore_fn.Event) -> None:
     print("On project updated triggered")
+
+    repository=utils.initialized_repo()
+
     db = firestore.client()
     Collection_name = "projects"
     project_id = event.params["docId"]
-    token = ""
-    auth = Auth.Token(token)
-    g = Github(auth=auth)
-    print(f"User f{g.get_user().login}")
-    u = User(token)
-    repository = Repository(u)
     doc_ref = db.collection(Collection_name).document(project_id)
     doc_snapshot = doc_ref.get()
     repo_name = doc_snapshot.get("repo_uuid")
@@ -139,10 +134,7 @@ def project_updated(event: firestore_fn.Event) -> None:
     print(f"Old info: {old_info}")
     
  
-    cache_docs = db.collection("cache").stream()
-    cache_doc = None
-    for doc in cache_docs:
-        cache_doc = doc  #if there is ONLY ONE DOCUMENT, which should be the case
+    cache_doc= utils.create_cache_doc(db)
 
     if cache_doc:
         cache_dict = cache_doc.to_dict().get
@@ -158,13 +150,9 @@ def project_updated(event: firestore_fn.Event) -> None:
 @firestore_fn.on_document_deleted(document="projects/{docId}")
 def project_deleted(event: firestore_fn.Event) -> None:
     print("On project deleted triggered")
-    # github authentication
-    token = ""
-    auth = Auth.Token(token)
-    g = Github(auth=auth)
-    print(f"User f{g.get_user().login}")
-    u = User(token)
-    repository = Repository(u)
+
+    repository=utils.initialized_repo()
+
     my_uuid = event.data.to_dict().get("repo_uuid")
     repository.delete_project(my_uuid)
     data = event.data.to_dict() if hasattr(event.data, 'to_dict') else event.data
@@ -177,6 +165,8 @@ def project_deleted(event: firestore_fn.Event) -> None:
         users_id = list(users_id.values())
     elif not isinstance(users_id, list):
         users_id = [users_id]
+    #finds co-authors ids of the delelted project in users collection 
+    #and deleted the project for the "projects" field in each user document
     user_docs = db.collection("users").where("id", "in", users_id).stream()
     for user_doc in user_docs:
         user_ref = user_doc.reference
@@ -195,6 +185,8 @@ def project_deleted(event: firestore_fn.Event) -> None:
 def oncreate(event: db_fn.Event) -> None:
     data = event.data # rtdb gives already a dictionary
     print(f"Data: {data}")
+    timestamp=event.time
+
 
     ###FIRESTORE DOCUMENT CREATION WITH TREE ELABORATION###
 
@@ -209,13 +201,27 @@ def oncreate(event: db_fn.Event) -> None:
     doc_ref = db.collection(Collection_name).document(project_id)
     doc_snapshot = doc_ref.get()
 
+    cache_doc= utils.create_cache_doc(db)
+
+
     
     tree_firestore, last_modified_info = utils.split_tree(tree)
     print("tree_structure:", tree_firestore)
-    last_modified = utils.insert_last_modified(last_modified_info)  # calcola last_modified prima di usarlo
+    last_modified = utils.insert_last_modified(last_modified_info, timestamp)  # set last-modified
+    data["last-modified"] = last_modified["last-modified"] 
+    print(f"Last mod info : {last_modified_info}")
     
-    data["last-modified"] = last_modified["last-modified"]  # aggiungi last-modified direttamente a data
+    for file_path, file_info in last_modified['last-modified'].items():
+        uuid_cache = file_info.get("uuid_cache")
+        content = last_modified_info.get(file_path, {}).get("content")
+    
+        path = file_path
+        print(f"uuid {uuid_cache}, content {content}")
+        repomanager.update_cache_in_progress(cache_doc, uuid_cache, content, path, timestamp)
+
     data["tree"] = tree_firestore  # realtime tree is converted to firestore tree
+    data["last-edit"] = timestamp
+
     
     if doc_snapshot.exists:  # if the project document already exists, it will not be created again
         print(f"Document with ID {project_id} already exists!")
@@ -274,15 +280,12 @@ def oncreate(event: db_fn.Event) -> None:
 @db_fn.on_value_updated(reference="/active_projects/{projectId}")
 def onupdate(event: db_fn.Event) -> None:
     print("Realtime database on update triggered")
+
+    repository=utils.initialized_repo()
+
     db = firestore.client()
     Collection_name = "projects"
     project_id = event.params["projectId"]
-    token = ""
-    auth = Auth.Token(token)
-    g = Github(auth=auth)
-    print(f"User {g.get_user().login}")
-    u = User(token)
-    repository = Repository(u)
     doc_ref = db.collection(Collection_name).document(project_id)
     doc_snapshot = doc_ref.get()
     repo_name = doc_snapshot.get("repo_uuid")
@@ -360,14 +363,14 @@ def onupdate(event: db_fn.Event) -> None:
                                     'tags': ""
                                 })
                             user_ref.update({"projects": updated_projects})
-            
-            #if co-authors are updated, add project to their profile
+      
+      
             if "co-authors" in updates: 
                 co_authors_id = after["co-authors"]
                 if isinstance(co_authors_id, dict):
                     co_authors_id = list(co_authors_id.values())
                 elif not isinstance(co_authors_id, list):
-                    users_co_authors_idid = [co_authors_id]
+                    co_authors_id = [co_authors_id]
 
                 # find removed co-authors
                 before_coauthors = before.get("co-authors", [])
@@ -432,10 +435,7 @@ def onupdate(event: db_fn.Event) -> None:
     doc_snapshot = doc_ref.get()
     #update tree  for added or removed files and for modified content
 
-    cache_docs = db.collection("cache").stream()
-    cache_doc = None
-    for doc in cache_docs:
-        cache_doc = doc  #if there is ONLY ONE DOCUMENT, which should be the case
+    cache_doc= utils.create_cache_doc(db)
 
     if cache_doc:
         cache_dict = cache_doc.to_dict()

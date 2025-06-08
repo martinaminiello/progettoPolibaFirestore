@@ -1,5 +1,19 @@
 import uuid
 import datetime
+from firebase_admin import  firestore
+from github import Github, Auth
+from repomanager import Repository
+from user import User
+
+
+def initialized_repo():
+    token = ""
+    auth = Auth.Token(token)
+    g = Github(auth=auth)
+    print(f"User {g.get_user().login}")
+    u = User(token)
+    repository = Repository(u)
+    return repository
 
 #convert tree keys to be compatible with firestore
 def convert_tree_keys(tree_section):
@@ -57,14 +71,12 @@ def split_tree(tree, base_path=""):
 
     return tree_structure, file_info_dict
     
-def insert_last_modified(file_info_dict):
+def insert_last_modified(file_info_dict, timestamp):
     last_modified_dict = {}
     for filepath, info in file_info_dict.items():
      
         uuid_cache = str(uuid.uuid4())
-        timestamp = datetime.datetime.now(datetime.timezone.utc)
         last_modified_dict[filepath] = {
-            "content": info.get("content"),
             "uuid_cache": uuid_cache,
             "last-modifier": info.get("last-modifier"),
             "timestamp": timestamp
@@ -72,5 +84,12 @@ def insert_last_modified(file_info_dict):
     return {"last-modified": last_modified_dict}
 
 
+def create_cache_doc(db):
+    cache_docs = db.collection("cache").stream()
+    cache_doc = None
+    for doc in cache_docs:
+        cache_doc = doc  #if there is ONLY ONE DOCUMENT, which should be the case
+        print(f"cache_doc= {cache_doc}")
+    return cache_doc
 
 

@@ -66,7 +66,13 @@ def failed_status(item, cache_doc):
                         })
          # TO DO: RETRY LOGIC
 
-
+def clean_cache(path,cache_doc):
+    cache_doc = cache_doc.reference.get()
+    queue_items = cache_doc.to_dict().get("queue_item", [])
+    to_remove = [item for item in queue_items if isinstance(item, dict) and item.get("path") == path]
+    print(f"Removing all items from queue with path {path}: {to_remove}")
+    if to_remove:
+        cache_doc.reference.update({"queue_item": ArrayRemove(to_remove)})
 
 
 
@@ -123,7 +129,7 @@ class Repository:
     
 
 
-    def create_tree(self, file_paths, repo_name, last_modified_info):
+    def create_tree(self, file_paths, repo_name,last_modified_info, cache_doc):
         print(f"Repo name: {repo_name}")
         repo = self.get_current_repo(repo_name)
 
@@ -136,13 +142,21 @@ class Repository:
         for path in file_paths:
             print(f"Processing path: {path}")
             file_info = last_modified_info.get(path, {})
-            content = file_info.get("content", "")
+            queue_items = cache_doc.to_dict().get("queue_item", [])
             author = file_info.get("last-modifier")
             uuid_cache = file_info.get("uuid_cache")
+            content = None
+            for item in queue_items:
+                if item.get("path") == path and item.get("uuid_cache") == uuid_cache:
+                    content = item.get("content")
+                    break
             print(f"Creating file at {path} with content: {repr(content)} e author: {author}")
             try:
                 repo.create_file(path, f"Add file {path}, version: {uuid_cache}", content)
                 print(f"File created at {path} with content: {repr(content)}")
+
+                clean_cache(path, cache_doc)
+                
              
             except GithubException as e:
                 if e.status == 422:
@@ -158,7 +172,7 @@ class Repository:
             new_paths = set(self.extract_file_paths(new_tree))
 
             print(f"File info dict: {new_info}")
-            new_modified_dict = utils.insert_last_modified(new_info)["last-modified"] #updates dictinary with new paths
+            new_modified_dict = utils.insert_last_modified(new_info, timestamp)["last-modified"] #updates dictinary with new paths
     
 
             doc = doc_ref.get()
@@ -222,6 +236,7 @@ class Repository:
                     "timestamp": timestamp
                 }
                 
+                update_cache_in_progress(cache_doc, uuid_cache, content, path, timestamp)
                 
                 try:
                     doc_ref.update({
@@ -311,22 +326,11 @@ class Repository:
         for path in deleted:
             print("To delete: ", path)
             try:
-                # REMOVE path from tree and last-modified
-                remove_path_from_tree(data["tree"], path)
-                timestamp = datetime.datetime.now(datetime.timezone.utc)
-                try:
-                 doc_ref.update({
-                    "last-edit": timestamp
-                })
-                except GoogleCloudError as e:
-                    print(f"Firestore update failed for last-edited: {e}")
+                file = repo.get_contents(path)
+                repo.delete_file(file.path, f"Remove {path}", file.sha)
             except GoogleCloudError as e:
                 print(f"Unexpected error in Firestore deleting {path}: {e}")
             
-            #removes paths in last-modified
-            if path in data["last-modified"]:
-                del data["last-modified"][path]
-            print(f"Deleted: {path}")
 
         # ADDED files: files that aren't in old paths
         added = new_paths - old_paths
@@ -344,6 +348,7 @@ class Repository:
             for item in queue_items:
                 if isinstance(item, dict) and item.get("uuid_cache") == uuid_cache:
                     content = item.get("content")
+                    print(f"content added files: {content}")
                     break
         
             print(f"Adding file at {path} with content: {repr(content)} and last modifier: {last_modifier}")
@@ -363,6 +368,14 @@ class Repository:
                 else:
                     print(f"Error creating {path}: {e}")
                     failed_status(item, cache_doc)
+            #clean queue
+                # clean the queue from all the items with the same path
+            cache_doc = cache_doc.reference.get()
+            queue_items = cache_doc.to_dict().get("queue_item", [])
+            to_remove = [item for item in queue_items if isinstance(item, dict) and item.get("path") == path]
+            print(f"Removing all items from queue with path {path}: {to_remove}")
+            if to_remove:
+                    cache_doc.reference.update({"queue_item": ArrayRemove(to_remove)})
 
 
         
@@ -372,94 +385,95 @@ class Repository:
         queue_items = cache_doc.to_dict().get("queue_item", [])
         modified = old_paths & new_paths
         for path in modified:
-            updated_items = []
-            failed_items = []
-            max_retries = 3
-            success = False
+            file_info = new_info.get(path, {})
+            old_uuid = old_info.get(path, {}).get("uuid_cache")
+            new_uuid = new_info.get(path, {}).get("uuid_cache")
+            print(f"{path} Old uuid: {old_uuid}, new uuid: {new_uuid}")
+            print(old_uuid!=new_uuid)
+            if old_uuid != new_uuid:
+                updated_items = []
+                failed_items = []
+                max_retries = 3
+                success = False
 
-            for attempt in range(max_retries):
-                # 🔄 Ricarica la queue aggiornata a ogni tentativo
-                cache_doc = cache_doc.reference.get()
-                queue_items = cache_doc.to_dict().get("queue_item", [])
+                for attempt in range(max_retries):
+                    # queue is refreshed at each attempt
+                    cache_doc = cache_doc.reference.get()
+                    queue_items = cache_doc.to_dict().get("queue_item", [])
 
-                # 📌 Prendi solo gli item per questo path
-                path_items = [item for item in queue_items if item.get("path") == path]
-                if not path_items:
-                    print(f"❌ No items found for path {path} on attempt {attempt+1}")
-                    break
+                    # consider only items for the same path (conflict)
+                    path_items = [item for item in queue_items if item.get("path") == path]
+                    if not path_items:
+                        print(f"No items found for path {path} on attempt {attempt+1}")
+                        break
 
-                # 🕒 Prendi sempre l’ultima modifica in base al timestamp
-                last_item = max(path_items, key=lambda x: x.get("timestamp", 0))
-                old_items = [item for item in path_items if item != last_item]
-                content = last_item.get("content")
+                    # Always take last update
+                    last_item = max(path_items, key=lambda x: x.get("timestamp", 0))
+                    old_items = [item for item in path_items if item != last_item]
+                    content = last_item.get("content")
 
-                try:
-                    file = repo.get_contents(path)
-                    print(f"Pushing: {content} (attempt {attempt+1})")
-                    repo.update_file(
-                        file.path,
-                        f"Update {path}, version {last_item.get('uuid_cache')}",
-                        content or "",
-                        file.sha
-                    )
-                    print(f"✅ Push completed: {path} for content {content}")
-                    success_item = dict(last_item)
-                    success_item["push_status"] = "success"
-                    updated_items.append(success_item)
-                    for old in old_items:
-                        failed_item = dict(old)
+                    try:
+                        file = repo.get_contents(path)
+                        print(f"Pushing: {content} (attempt {attempt+1})")
+                        repo.update_file(
+                            file.path,
+                            f"Update {path}, version {last_item.get('uuid_cache')}",
+                            content or "",
+                            file.sha
+                        )
+                        print(f" Push completed: {path} for content {content}")
+                        success_item = dict(last_item)
+                        success_item["push_status"] = "success"
+                        updated_items.append(success_item)
+                        for old in old_items:
+                            failed_item = dict(old)
+                            failed_item["push_status"] = "failed"
+                            updated_items.append(failed_item)
+                        success = True
+                        break
+                    except GithubException as e:
+                        print(f"Error pushing {path}: {e}")
+                        if e.status == 409 and attempt < max_retries - 1:
+                            print("SHA conflict, retrying after delay...")
+                            time.sleep(2)
+                            continue #next attempt
+                        elif e.status == 409:
+                            # 3 attempts weren't enough, other updates arrived while pushing other
+                            try: #update is orce
+                                file = repo.get_contents(path)
+                                repo.update_file(
+                                    file.path,
+                                    f"Force update {path}, version {last_item.get('uuid_cache')}",
+                                    content or "",
+                                    file.sha
+                                )
+                                print(f"Forced push completed: {path} for content {content}")
+                                success_item = dict(last_item)
+                                success_item["push_status"] = "success"
+                                updated_items.append(success_item)
+                                for old in old_items:
+                                    failed_item = dict(old)
+                                    failed_item["push_status"] = "failed"
+                                    updated_items.append(failed_item)
+                                success = True
+                                break
+                            except Exception as e2:
+                                print(f"Error forcing update: {e2}")
+                        # everything fails
+                        failed_item = dict(last_item)
                         failed_item["push_status"] = "failed"
                         updated_items.append(failed_item)
-                    success = True
-                    break
-                except GithubException as e:
-                    print(f"⚠️ Error pushing {path}: {e}")
-                    if e.status == 409 and attempt < max_retries - 1:
-                        print("SHA conflict, retrying after delay...")
-                        time.sleep(2)
-                        continue
-                    elif e.status == 409:
-                        # 🔄 Forza l’ultimo last_item dopo conflitto
-                        try:
-                            file = repo.get_contents(path)
-                            repo.update_file(
-                                file.path,
-                                f"Force update {path}, version {last_item.get('uuid_cache')}",
-                                content or "",
-                                file.sha
-                            )
-                            print(f"✅ Forced push completed: {path} for content {content}")
-                            success_item = dict(last_item)
-                            success_item["push_status"] = "success"
-                            updated_items.append(success_item)
-                            for old in old_items:
-                                failed_item = dict(old)
-                                failed_item["push_status"] = "failed"
-                                updated_items.append(failed_item)
-                            success = True
-                            break
-                        except Exception as e2:
-                            print(f"❌ Error forcing update: {e2}")
-                    # 🟥 Se fallisce tutto
-                    failed_item = dict(last_item)
-                    failed_item["push_status"] = "failed"
-                    updated_items.append(failed_item)
-                    for old in old_items:
-                        failed_item = dict(old)
-                        failed_item["push_status"] = "failed"
-                        updated_items.append(failed_item)
-                    break
+                        for old in old_items:
+                            failed_item = dict(old)
+                            failed_item["push_status"] = "failed"
+                            updated_items.append(failed_item)
+                        break  #TO DO: what to do with others types of errors
 
-            # 🧹 Rimuovi dalla queue gli item per quel path
-            cache_doc = cache_doc.reference.get()
-            queue_items = cache_doc.to_dict().get("queue_item", [])
-            to_remove = [item for item in queue_items if isinstance(item, dict) and item.get("path") == path]
-            print(f"Removing all items from queue with path {path}: {to_remove}")
-            if to_remove:
-                cache_doc.reference.update({"queue_item": ArrayRemove(to_remove)})
+                # clean the queue from all the items with the same path
+                clean_cache(path, cache_doc)
 
-            print(f"✅ Pushed items: {updated_items}")
-            print(f"❌ Failed items: {failed_items}")
+                print(f"Pushed items: {updated_items}")
+                print(f"Failed items: {failed_items}")
 
 
 
