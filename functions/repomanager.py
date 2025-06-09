@@ -198,8 +198,8 @@ class Repository:
             repo = self.get_current_repo(repo_name)
             print(f" update_tree_firestore: {repo_name} - old_tree: {old_tree}, new_tree: {new_tree}, doc_ref: {doc_ref}, old_info: {old_info}, new_info: {new_info}")
 
-            old_paths = set(extract_all_paths(old_tree))
-            new_paths = set(extract_all_paths(new_tree))
+            old_paths = set(self.extract_file_paths(old_tree))
+            new_paths = set(self.extract_file_paths(new_tree))
 
             print(f"File info dict: {new_info}")
             new_modified_dict = utils.insert_last_modified(new_info, timestamp)["last-modified"]
@@ -212,9 +212,12 @@ class Repository:
             if "last-modified" not in data or not isinstance(data["last-modified"], dict):
                 data["last-modified"] = {}
 
-            deleted = old_paths - new_paths
-            print("old_paths:", old_paths)
-            print("new_paths:", new_paths)
+            old_del_paths = set(extract_all_paths(old_tree)) #also considers folders otherwise only files are deleted
+            new_del_paths = set(extract_all_paths(new_tree))
+
+            deleted = old_del_paths - new_del_paths
+            print("old_paths:", old_del_paths)
+            print("new_paths:", new_del_paths)
 
             for path in deleted:
                 print("To delete:", path)
