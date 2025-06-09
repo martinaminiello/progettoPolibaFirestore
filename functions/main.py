@@ -78,36 +78,18 @@ def project_created(event: firestore_fn.Event) -> None:
   
     #build all files paths from the tree
     file_paths = repository.extract_file_paths(tree)
-    # delete content and uuid_cache from last_modified_info only if create_tree is successful
-    create_tree_success = True
+  
     cache_doc= utils.create_cache_doc(db)
     if not cache_doc:
-        print("Nessun documento cache trovato! Impossibile procedere.")
+        print("No cache found.")
         return
     try:
             repository.create_tree(file_paths, myuuid, last_modified_info, cache_doc)
     except Exception as e:
             print(f"Errore in create_tree: {e}")
-            create_tree_success = False
 
-    if last_modified_info and create_tree_success:
-            doc = db.collection(Collection_name).document(doc_id).get()
-            data = doc.to_dict() or {}
-            if "last-modified" in data and isinstance(data["last-modified"], dict):
-                for file_path in last_modified_info:
-                    if file_path in data["last-modified"]:
-                        if "content" in data["last-modified"][file_path]:
-                            del data["last-modified"][file_path]["content"]
-                     
-                try:
-                    db.collection(Collection_name).document(doc_id).update({
-                        "last-modified": data["last-modified"]
-                    })
-                    db.collection(Collection_name).document(doc_id).update({
-                        "last-edit": data["last-modified"][file_path]["timestamp"]
-                    })
-                except GoogleCloudError as e:
-                    print(f"Firestore content deletion failed: {e}")
+
+
 
 
 @firestore_fn.on_document_updated(document="projects/{docId}")
@@ -188,12 +170,6 @@ def oncreate(event: db_fn.Event) -> None:
     timestamp=event.time
 
 
-    ###FIRESTORE DOCUMENT CREATION WITH TREE ELABORATION###
-
-    tree_real_time=data.get("tree")
-    tree= utils.convert_tree_keys(tree_real_time)  # replaces "_" with "." in tree
-    print(f"Sanitized tree: {tree}")
-   
     #Firestore db is initialized 
     db = firestore.client()
     project_id = data['id']
@@ -201,26 +177,6 @@ def oncreate(event: db_fn.Event) -> None:
     doc_ref = db.collection(Collection_name).document(project_id)
     doc_snapshot = doc_ref.get()
 
-    cache_doc= utils.create_cache_doc(db)
-
-
-    
-    tree_firestore, last_modified_info = utils.split_tree(tree)
-    print("tree_structure:", tree_firestore)
-    last_modified = utils.insert_last_modified(last_modified_info, timestamp)  # set last-modified
-    data["last-modified"] = last_modified["last-modified"] 
-    print(f"Last mod info : {last_modified_info}")
-    
-    for file_path, file_info in last_modified['last-modified'].items():
-        uuid_cache = file_info.get("uuid_cache")
-        content = last_modified_info.get(file_path, {}).get("content")
-    
-        path = file_path
-        print(f"uuid {uuid_cache}, content {content}")
-        repomanager.update_cache_in_progress(cache_doc, uuid_cache, content, path, timestamp)
-
-    data["tree"] = tree_firestore  # realtime tree is converted to firestore tree
-    data["last-edit"] = timestamp
 
     
     if doc_snapshot.exists:  # if the project document already exists, it will not be created again
@@ -228,7 +184,32 @@ def oncreate(event: db_fn.Event) -> None:
         return
     else:
         try:
-           doc_ref.set(data)  # creates new document with project data
+            ###FIRESTORE DOCUMENT CREATION WITH TREE ELABORATION###
+            tree_real_time=data.get("tree")
+            tree= utils.convert_tree_keys(tree_real_time)  # replaces "_" with "." in tree
+            print(f"Sanitized tree: {tree}")
+
+            cache_doc= utils.create_cache_doc(db)
+
+            tree_firestore, last_modified_info = utils.split_tree(tree)
+            print("tree_structure:", tree_firestore)
+            last_modified = utils.insert_last_modified(last_modified_info, timestamp)  # set last-modified
+            data["last-modified"] = last_modified["last-modified"] 
+            print(f"Last mod info : {last_modified_info}")
+            
+            for file_path, file_info in last_modified['last-modified'].items():
+                uuid_cache = file_info.get("uuid_cache")
+                content = last_modified_info.get(file_path, {}).get("content")
+            
+                path = file_path
+                print(f"uuid {uuid_cache}, content {content}")
+                repomanager.update_cache_in_progress(cache_doc, uuid_cache, content, path, timestamp)
+
+            data["tree"] = tree_firestore  # realtime tree is converted to firestore tree
+            data["last-edit"] = timestamp
+
+            doc_ref.set(data)  # creates new document with project data
+        
         except GoogleCloudError as e:
             print(f"Firestore creation failed: {e}")
 

@@ -268,6 +268,7 @@ class Repository:
                     content = file_info.get("content", "")
                     last_modifier = file_info.get("last-modifier", "")
                     uuid_cache = str(uuid.uuid4())
+                    print(f"update firestore: last-modifier {last_modifier}")
                  
                     
                     print(f"Modified: {path}")
@@ -282,8 +283,9 @@ class Repository:
                         
                     try:
                             doc_ref.update({
-                                "last-edit": data["last-modified"][path]["timestamp"]
-                            })
+                            "last-edit": data["last-modified"][path]["timestamp"],
+                            "last-modified": data["last-modified"]
+                        })
                     except GoogleCloudError as e:
                             print(f"Firestore update failed: {e}")
                         
@@ -439,7 +441,7 @@ class Repository:
                             continue #next attempt
                         elif e.status == 409:
                             # 3 attempts weren't enough, other updates arrived while pushing other
-                            try: #update is orce
+                            try: #update is forced
                                 file = repo.get_contents(path)
                                 repo.update_file(
                                     file.path,
