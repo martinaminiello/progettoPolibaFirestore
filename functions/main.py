@@ -430,8 +430,52 @@ def onupdate(event: db_fn.Event) -> None:
             repository.update_firestore(old_tree, new_tree, repo_name, doc_ref, old_file_info_converted, new_file_info_converted, cache_doc, time)
         
         except Exception as e:
-            print(f"Errore in update_tree: {e}")
+            print(f"Error in update_tree: {e}")
 
+
+
+@db_fn.on_value_deleted(reference="/active_projects/{projectId}")
+def ondelete(event: db_fn.Event) -> None:
+    print("Realtime database on delete triggered")
+
+ 
+    db = firestore.client()
+    Collection_name = "projects"
+    project_id = event.params["projectId"]
+    doc_ref = db.collection(Collection_name).document(project_id)
+    doc_snapshot = doc_ref.get()
+    time = event.time
+    print(f"TIME : {time}")
+
+    deleted_data = event.data  # information befero deletion
+
+    if not doc_snapshot.exists:
+        print(f"Document {project_id} does not exist in Firestore.")
+        return
+
+    try:
+        before_authors = deleted_data.get("current-authors", [])
+        
+        if isinstance(before_authors, dict):
+            before_authors = set(before_authors.values())
+        else:
+            before_authors = set(before_authors)
+
+        for inactive in before_authors:
+            user_ref = db.collection("users").document(inactive)
+            user_doc = user_ref.get()
+            if user_doc.exists:
+                projects = user_doc.get("projects") or []
+                updated_projects = []
+                for proj in projects:
+                    if proj.get('id') == project_id:
+                        proj = dict(proj)
+                        proj['active'] = False
+                    updated_projects.append(proj)
+                user_ref.update({"projects": updated_projects})
+
+    except Exception as e:
+        print(f"Error in updating active field at real-time deletion: {e}")
 
 
 
