@@ -261,7 +261,6 @@ def oncreate(event: db_fn.Event) -> None:
 @db_fn.on_value_updated(reference="/active_projects/{projectId}")
 def onupdate(event: db_fn.Event) -> None:
     print("Realtime database on update triggered")
-
     repository=utils.initialized_repo()
 
     db = firestore.client()
@@ -282,118 +281,97 @@ def onupdate(event: db_fn.Event) -> None:
 
     updates = {}
 
-    # update simple fields
-    for field in ["title", "current-authors", "owners", "co-authors"]: #perhaps co-authors is managed directly between the client and Firestore
+    # aggiorna campi semplici
+    for field in ["title", "current-authors", "owners", "co-authors"]:
         if before.get(field) != after.get(field):
             updates[field] = after.get(field)
-    if updates:
-        try:
+
+    def update_user_projects(user_id: str, project_id: str, active_value: bool):
+        user_ref = db.collection("users").document(user_id)
+        user_doc = user_ref.get()
+        if not user_doc.exists:
+            print(f"User {user_id} does not exist.")
+            return
+        projects = user_doc.get("projects") or []
+        updated_projects = []
+        found = False
+        for proj in projects:
+            if proj.get("id") == project_id:
+                proj = dict(proj)
+                proj['active'] = active_value
+                found = True
+            updated_projects.append(proj)
+        if not found:
+            updated_projects.append({
+                'id': project_id,
+                'workbench': False,
+                'active': active_value,
+                'tags': ""
+            })
+        user_ref.update({"projects": updated_projects})
+        print(f"Updated project {project_id} active={active_value} for user {user_id}.")
+
+    try:
+        if updates:
             doc_ref.update(updates)
             print(f"Updated simple fields: {updates}")
-            
-            # update "active" field in users documents
-            if "current-authors" in updates:
-                before_authors = before.get("current-authors", [])
-                after_authors = after.get("current-authors", [])
-                if isinstance(before_authors, dict):
-                    before_authors = set(before_authors.values())
-                else:
-                    before_authors = set(before_authors)
-                if isinstance(after_authors, dict):
-                    after_authors = set(after_authors.values())
-                else:
-                    after_authors = set(after_authors)
-                # users that have no longer the project as active
-                not_current_anymore = before_authors - after_authors
-                # users for which the project is now active
-                just_added = after_authors - before_authors
 
-                if not_current_anymore: #"active": False
-                    for deleted in not_current_anymore:
-                        user_ref = db.collection("users").document(deleted)
-                        user_doc = user_ref.get()
-                        if user_doc.exists:
-                            projects = user_doc.get("projects") or []
-                            updated_projects = []
-                            for proj in projects:
-                                if proj.get('id') == project_id:
-                                    proj = dict(proj)
-                                    proj['active'] = False
-                                updated_projects.append(proj)
-                            user_ref.update({"projects": updated_projects})
+        # gestione current-authors
+        if "current-authors" in updates:
+            before_authors = before.get("current-authors", [])
+            after_authors = after.get("current-authors", [])
+            if isinstance(before_authors, dict):
+                before_authors = set(before_authors.values())
+            else:
+                before_authors = set(before_authors)
+            if isinstance(after_authors, dict):
+                after_authors = set(after_authors.values())
+            else:
+                after_authors = set(after_authors)
 
-                if just_added: #"active": True
-                    for added in just_added:
-                        user_ref = db.collection("users").document(added)
-                        user_doc = user_ref.get()
-                        if user_doc.exists:
-                            projects = user_doc.get("projects") or []
-                            found = False
-                            updated_projects = []
-                            for proj in projects:
-                                if proj.get('id') == project_id:
-                                    proj = dict(proj)
-                                    proj['active'] = True
-                                    found = True
-                                updated_projects.append(proj)
-                            if not found: # if for some reason project was not created in user profile, it is now
-                                updated_projects.append({
-                                    'id': project_id,
-                                    'workbench': False,
-                                    'active': True,
-                                    'tags': ""
-                                })
-                            user_ref.update({"projects": updated_projects})
-      
-      
-            if "co-authors" in updates: 
-                co_authors_id = after["co-authors"]
-                if isinstance(co_authors_id, dict):
-                    co_authors_id = list(co_authors_id.values())
-                elif not isinstance(co_authors_id, list):
-                    co_authors_id = [co_authors_id]
+            not_current_anymore = before_authors - after_authors
+            just_added = after_authors - before_authors
 
-                # find removed co-authors
-                before_coauthors = before.get("co-authors", [])
-                if isinstance(before_coauthors, dict):
-                    before_coauthors = list(before_coauthors.values())
-                elif not isinstance(before_coauthors, list):
-                    before_coauthors = [before_coauthors]
-                removed_coauthors = set(before_coauthors) - set(co_authors_id)
-                # remove project from removed co-authors
-                for removed_id in removed_coauthors:
-                    user_ref = db.collection("users").document(removed_id)
-                    user_doc = user_ref.get()
-                    if user_doc.exists:
-                        projects = user_doc.get("projects") or []
-                        updated_projects = [proj for proj in projects if proj.get('id') != project_id]
-                        user_ref.update({"projects": updated_projects})
-                        print(f"Removed project {project_id} from {removed_id}.")
+            for user_id in not_current_anymore:
+                update_user_projects(user_id, project_id, False)
 
-                # add project to new co-authors
-                user_docs = list(
-                    db.collection("users")
-                    .where(filter=FieldFilter("id", "in", co_authors_id)) #streams users that are in co-authors
-                    .stream()
-                )
-                user_project = {
-                    'id': project_id,
-                    'workbench': False,
-                    'active': False,
-                    'tags': ""
-                }
-                for user_doc in user_docs:
-                    user_id = user_doc.get("id")
-                    user_ref = user_doc.reference
-                    try:
-                        user_ref.update({
-                            "projects": ArrayUnion([user_project])
-                        })
-                        print(f"Added project {project_id} to {user_id}.")
-                    except Exception as e:
-                        print(f"Error: {user_id}: {e}")
-        except GoogleCloudError as e:
-            print(f"Error updating simple fields: {e}")
+            for user_id in just_added:
+                update_user_projects(user_id, project_id, True)
+
+        # gestione co-authors
+        if "co-authors" in updates:
+            co_authors_id = after["co-authors"]
+            if isinstance(co_authors_id, dict):
+                co_authors_id = list(co_authors_id.values())
+            elif not isinstance(co_authors_id, list):
+                co_authors_id = [co_authors_id]
+
+            before_coauthors = before.get("co-authors", [])
+            if isinstance(before_coauthors, dict):
+                before_coauthors = list(before_coauthors.values())
+            elif not isinstance(before_coauthors, list):
+                before_coauthors = [before_coauthors]
+
+            removed_coauthors = set(before_coauthors) - set(co_authors_id)
+            added_coauthors = set(co_authors_id) - set(before_coauthors)
+
+            # rimuove progetto da co-autori rimossi
+            for removed_id in removed_coauthors:
+                user_ref = db.collection("users").document(removed_id)
+                user_doc = user_ref.get()
+                if user_doc.exists:
+                    projects = user_doc.get("projects") or []
+                    updated_projects = [proj for proj in projects if proj.get('id') != project_id]
+                    user_ref.update({"projects": updated_projects})
+                    print(f"Removed project {project_id} from {removed_id}.")
+
+            # aggiunge progetto a nuovi co-autori con active=False
+            for added_id in added_coauthors:
+                update_user_projects(added_id, project_id, False)
+
+    except GoogleCloudError as e:
+        print(f"Error updating simple fields: {e}")
+
 
     old_tree_realtime = event.data.before.get("tree", {})
     old_tree_structure=utils.split_tree(old_tree_realtime)[0] #split tree to get the structure
