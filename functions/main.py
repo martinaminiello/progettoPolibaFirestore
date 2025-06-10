@@ -474,6 +474,10 @@ def ondelete(event: db_fn.Event) -> None:
                     updated_projects.append(proj)
                 user_ref.update({"projects": updated_projects})
 
+        doc_ref.update({
+            "current-authors": firestore.ArrayRemove(list(before_authors))
+        })
+
     except Exception as e:
         print(f"Error in updating active field at real-time deletion: {e}")
 
