@@ -281,7 +281,7 @@ def onupdate(event: db_fn.Event) -> None:
 
     updates = {}
 
-    # aggiorna campi semplici
+    # updates simple fields
     for field in ["title", "current-authors", "owners", "co-authors"]:
         if before.get(field) != after.get(field):
             updates[field] = after.get(field)
@@ -316,7 +316,7 @@ def onupdate(event: db_fn.Event) -> None:
             doc_ref.update(updates)
             print(f"Updated simple fields: {updates}")
 
-        # gestione current-authors
+        #  current-authors
         if "current-authors" in updates:
             before_authors = before.get("current-authors", [])
             after_authors = after.get("current-authors", [])
@@ -338,7 +338,7 @@ def onupdate(event: db_fn.Event) -> None:
             for user_id in just_added:
                 update_user_projects(user_id, project_id, True)
 
-        # gestione co-authors
+        # co-authors
         if "co-authors" in updates:
             co_authors_id = after["co-authors"]
             if isinstance(co_authors_id, dict):
@@ -355,7 +355,7 @@ def onupdate(event: db_fn.Event) -> None:
             removed_coauthors = set(before_coauthors) - set(co_authors_id)
             added_coauthors = set(co_authors_id) - set(before_coauthors)
 
-            # rimuove progetto da co-autori rimossi
+            # removes project from removed co-authors 
             for removed_id in removed_coauthors:
                 user_ref = db.collection("users").document(removed_id)
                 user_doc = user_ref.get()
@@ -365,7 +365,7 @@ def onupdate(event: db_fn.Event) -> None:
                     user_ref.update({"projects": updated_projects})
                     print(f"Removed project {project_id} from {removed_id}.")
 
-            # aggiunge progetto a nuovi co-autori con active=False
+            # aadd project to new co-authors with active=False
             for added_id in added_coauthors:
                 update_user_projects(added_id, project_id, False)
 
@@ -425,7 +425,7 @@ def ondelete(event: db_fn.Event) -> None:
     time = event.time
     print(f"TIME : {time}")
 
-    deleted_data = event.data  # information befero deletion
+    deleted_data = event.data  # information befere deletion
 
     if not doc_snapshot.exists:
         print(f"Document {project_id} does not exist in Firestore.")

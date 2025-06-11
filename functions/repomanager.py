@@ -405,7 +405,7 @@ class Repository:
                 else:
                     print(f"Error creating {path}: {e}")
                     failed_status(item, cache_doc)
-            #clean queue
+         
                 # clean the queue from all the items with the same path
             cache_doc = cache_doc.reference.get()
             queue_items = cache_doc.to_dict().get("queue_item", [])
