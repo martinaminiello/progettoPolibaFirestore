@@ -372,7 +372,10 @@ def onupdate(event: db_fn.Event) -> None:
     except GoogleCloudError as e:
         print(f"Error updating simple fields: {e}")
 
-
+    print("AFTER keys:", list(event.data.after.keys()))
+    print("AFTER raw:", event.data.after)
+    print("FULL EVENT BEFORE:", event.data.before)
+    print("FULL EVENT AFTER:", event.data.after)
     old_tree_realtime = event.data.before.get("tree", {})
     old_tree_structure=utils.split_tree(old_tree_realtime)[0] #split tree to get the structure
     old_tree=utils.convert_tree_keys(old_tree_structure)
