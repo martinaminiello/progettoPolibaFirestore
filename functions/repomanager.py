@@ -13,6 +13,7 @@ from google.cloud import firestore
 from google.api_core.exceptions import GoogleAPICallError, FailedPrecondition
 import uuid
 import time
+from google.api_core.exceptions import FailedPrecondition
 from google.cloud import firestore
 from google.api_core.exceptions import GoogleAPICallError, FailedPrecondition
 
@@ -450,7 +451,7 @@ class Repository:
                 # Create the file on GitHub repository
                 repo.create_file(path, f"Add {path}, version {uuid_cache}", content)
                 print(f"[add] Successfully created {path}")
-            except firestore.PreconditionFailed:
+            except FailedPrecondition:
                 print(f"[firestore] Precondition failed when adding {path}")
             except GithubException as e:
                 print(f"[github] Failed to create {path}: {e}")
@@ -530,7 +531,7 @@ class Repository:
                     print(f"[modify] Updated {path}")
                     break
 
-                except firestore.PreconditionFailed:
+                except FailedPrecondition:
                     print(f"[firestore] Precondition failed for {path}, retrying ({attempt+1}/10)")
                     time.sleep(1)
                 except GithubException as e:
