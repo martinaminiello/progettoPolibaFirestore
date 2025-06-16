@@ -17,6 +17,26 @@ from google.cloud import firestore
 from google.api_core.exceptions import GoogleAPICallError, FailedPrecondition
 
 
+def is_cache_stable(cache_doc, idle_seconds=2):
+    """
+    Returns True if no item in the queue has been updated in the last `idle_seconds`.
+    """
+    snapshot = cache_doc.reference.get()
+    now = time.time()
+    items = snapshot.to_dict().get("queue_item", [])
+
+    for item in items:
+        timestamp_obj = item.get("timestamp")
+        if timestamp_obj is None:
+            continue
+        # Convert Firestore Timestamp to float seconds
+        timestamp = timestamp_obj.timestamp()
+        if now - timestamp < idle_seconds:
+            return False
+    return True
+
+
+
 def create_tree_and_infos(event):
     old_tree_realtime = event.data.before.get("tree", {})
     old_tree_structure=utils.split_tree(old_tree_realtime)[0] #split tree to get the structure
@@ -361,99 +381,128 @@ class Repository:
 
     def update_tree(self, old_tree, new_tree, repo_name, doc_ref, old_info, new_info, cache_doc):
         repo = self.get_current_repo(repo_name)
-        print(f" update_tree: {repo_name} - old_tree: {old_tree}, new_tree: {new_tree}, doc_ref: {doc_ref}, old_info: {old_info}, new_info: {new_info}")
+        print(f"[update_tree] {repo_name} | old_tree: {old_tree}, new_tree: {new_tree}")
+
+        # Wait for Firestore queue to stabilize before proceeding with GitHub updates
+        MAX_WAIT = 8  # maximum total wait time in seconds
+        WAIT_INTERVAL = 1  # interval between checks in seconds
+
+        print("[sync] Waiting for Firestore to stabilize...")
+        for _ in range(MAX_WAIT):
+            if is_cache_stable(cache_doc):
+                print("[sync] Firestore stable. Proceeding.")
+                break
+            time.sleep(WAIT_INTERVAL)
+        else:
+            print("[sync] Timeout waiting for Firestore stabilization. Proceeding anyway.")
+
         old_paths = set(self.extract_file_paths(old_tree))
         new_paths = set(self.extract_file_paths(new_tree))
 
-        print(f"File info dict: {new_info}")
-
         doc = doc_ref.get()
         data = doc.to_dict() or {}
-        if "tree" not in data or not isinstance(data["tree"], dict):
-            data["tree"] = {}
-        if "last-modified" not in data or not isinstance(data["last-modified"], dict):
-            data["last-modified"] = {}
+        data.setdefault("tree", {})
+        data.setdefault("last-modified", {})
 
-        # Deleted files
-        deleted = old_paths - new_paths
-        for path in deleted:
-            print("To delete:", path)
+        # ----------------------
+        # Handle Deleted Files
+        # ----------------------
+        for path in old_paths - new_paths:
+            print(f"[delete] {path}")
             try:
                 safe_delete_file(repo, path)
             except GoogleCloudError as e:
-                print(f"Unexpected error deleting {path}: {e}")
+                print(f"[error] Deleting {path} failed: {e}")
+            clean_cache(path, cache_doc)
 
-        # Added files
-        added = new_paths - old_paths
-        added_success = set()
-        for path in added:
-            print("To add:", path)
+        # ----------------------
+        # Handle Added Files
+        # ----------------------
+        for path in new_paths - old_paths:
+            print(f"[add] {path}")
             file_info = new_info.get(path, {})
             uuid_cache = file_info.get("uuid_cache", "")
             content = None
 
-            cache_doc = cache_doc.reference.get()
-            queue_items = cache_doc.to_dict().get("queue_item", [])
-            update_time = cache_doc.update_time
+            snapshot = cache_doc.reference.get()
+            update_time = snapshot.update_time
+            queue_items = snapshot.to_dict().get("queue_item", [])
 
+            # Find the content matching the uuid_cache
             for item in queue_items:
-                if isinstance(item, dict) and item.get("uuid_cache") == uuid_cache:
+                if item.get("uuid_cache") == uuid_cache:
                     content = item.get("content")
                     break
 
+            if content is None:
+                print(f"[warn] Content not found for {path} with uuid {uuid_cache}, skipping")
+                continue
+
             try:
-                # Firestore first, with precondition
+                # Remove corresponding items from the queue
                 to_remove = [item for item in queue_items if item.get("path") == path]
                 if to_remove:
                     cache_doc.reference.update(
                         {"queue_item": ArrayRemove(to_remove)},
                         firestore.Client.write_option(last_update_time=update_time)
                     )
-                # GitHub file creation after Firestore update
-                repo.create_file(path, f"Add {path}, version {uuid_cache}", content or "")
-                added_success.add(path)
+
+                # Create the file on GitHub repository
+                repo.create_file(path, f"Add {path}, version {uuid_cache}", content)
+                print(f"[add] Successfully created {path}")
             except firestore.PreconditionFailed:
-                print(f"Precondition failed for {path}, skipping")
+                print(f"[firestore] Precondition failed when adding {path}")
             except GithubException as e:
-                print(f"GitHub error creating {path}: {e}")
+                print(f"[github] Failed to create {path}: {e}")
                 failed_status(item, cache_doc)
 
-        # Modified files
-        modified = old_paths & new_paths
-        for path in modified:
+            clean_cache(path, cache_doc)
+
+        # -------------------------
+        # Handle Modified Files
+        # -------------------------
+        for path in old_paths & new_paths:
             old_uuid = old_info.get(path, {}).get("uuid_cache")
             new_uuid = new_info.get(path, {}).get("uuid_cache")
+
             if old_uuid == new_uuid:
-                continue
+                continue  # No change detected, skip
 
-            max_retries = 10
-            for attempt in range(max_retries):
-                doc_snapshot = cache_doc.reference.get()
-                update_time = doc_snapshot.update_time
-                queue_items = doc_snapshot.to_dict().get("queue_item", [])
+            print(f"[modify] Updating {path}")
+            for attempt in range(10):
+                snapshot = cache_doc.reference.get()
+                update_time = snapshot.update_time
+                queue_items = snapshot.to_dict().get("queue_item", [])
 
-                path_items = [item for item in queue_items if item.get("path") == path and item.get("push_status") != "success"]
+                # Select pending updates for this path that haven't succeeded yet
+                path_items = [
+                    i for i in queue_items
+                    if i.get("path") == path and i.get("push_status") != "success"
+                ]
                 if not path_items:
-                    print(f"All items for {path} already pushed")
+                    print(f"[modify] No pending updates for {path}")
                     break
 
-                last_item = max(path_items, key=lambda x: x.get("timestamp", 0))
+                last_item = max(path_items, key=lambda i: i.get("timestamp", 0))
                 latest_uuid = last_item.get("uuid_cache")
                 content = last_item.get("content")
 
-                # Re-check to confirm it's still the last item
+                # Confirm that the last_item is still the latest one
                 fresh_doc = cache_doc.reference.get()
                 fresh_items = fresh_doc.to_dict().get("queue_item", [])
-                fresh_path_items = [i for i in fresh_items if i.get("path") == path and i.get("push_status") != "success"]
-                true_last_item = max(fresh_path_items, key=lambda x: x.get("timestamp", 0), default=None)
+                fresh_path_items = [
+                    i for i in fresh_items
+                    if i.get("path") == path and i.get("push_status") != "success"
+                ]
+                true_last = max(fresh_path_items, key=lambda i: i.get("timestamp", 0), default=None)
 
-                if not true_last_item or true_last_item.get("uuid_cache") != latest_uuid:
-                    print(f"Outdated update for {path}: {latest_uuid}, retrying")
+                if not true_last or true_last.get("uuid_cache") != latest_uuid:
+                    print(f"[retry] Outdated uuid for {path}, retrying")
                     time.sleep(1)
                     continue
 
-                # Update Firestore first
                 try:
+                    # Update push statuses in Firestore queue: success for latest, failed for others
                     new_queue = []
                     for item in fresh_items:
                         if item.get("path") != path:
@@ -470,28 +519,26 @@ class Repository:
                         firestore.Client.write_option(last_update_time=update_time)
                     )
 
-                    # Only after Firestore update succeeds, update GitHub
+                    # Update the file in GitHub repository
                     file = repo.get_contents(path)
                     repo.update_file(
                         file.path,
                         f"Update {path}, version {latest_uuid}",
-                        content or "",
+                        content,
                         file.sha
                     )
-
-                    print(f"Update complete for {path}")
+                    print(f"[modify] Updated {path}")
                     break
 
                 except firestore.PreconditionFailed:
-                    print(f"Precondition failed for {path}, retrying ({attempt+1}/{max_retries})")
+                    print(f"[firestore] Precondition failed for {path}, retrying ({attempt+1}/10)")
                     time.sleep(1)
-                    continue
                 except GithubException as e:
-                    print(f"GitHub update failed for {path}: {e}")
+                    print(f"[github] Failed to update {path}: {e}")
                     time.sleep(2)
-                    continue
 
-        clean_cache(path, cache_doc)
+            clean_cache(path, cache_doc)
+
 
 
 
