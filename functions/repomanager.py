@@ -9,6 +9,34 @@ import utils
 from google.cloud.firestore_v1 import ArrayUnion
 from google.cloud.firestore_v1 import ArrayRemove
 from google.cloud import firestore
+from google.cloud import firestore
+from google.api_core.exceptions import GoogleAPICallError, FailedPrecondition
+import uuid
+import time
+from google.cloud import firestore
+from google.api_core.exceptions import GoogleAPICallError, FailedPrecondition
+
+
+def create_tree_and_infos(event):
+    old_tree_realtime = event.data.before.get("tree", {})
+    old_tree_structure=utils.split_tree(old_tree_realtime)[0] #split tree to get the structure
+    old_tree=utils.convert_tree_keys(old_tree_structure)
+    print(f" Old tree: {old_tree}")
+        
+    new_tree_realtime = event.data.after.get("tree", {})
+    new_tree_structure=utils.split_tree(new_tree_realtime)[0] #split tree to get the structure
+    new_tree=utils.convert_tree_keys(new_tree_structure)
+    print(f" New tree: {new_tree}")
+
+    old_file_info = utils.split_tree(old_tree_realtime)[1]
+    old_file_info_converted = utils.convert_tree_keys(old_file_info) #convert old file info keys to be compatible with firestore
+    print(f" Old file info: {old_file_info_converted}")
+        
+    new_file_info = utils.split_tree(new_tree_realtime)[1]
+    new_file_info_converted = utils.convert_tree_keys(new_file_info) #convert new file info keys to be compatible with firestore
+    print(f" New file info: {new_file_info_converted}")
+
+    return old_tree, new_tree, old_file_info_converted, new_file_info_converted
 
 
 def set_nested_dict(tree, path, value):
@@ -161,19 +189,19 @@ class Repository:
         paths = []
 
         if not isinstance(tree_map, dict):
-            print("Tree map is not a dictionary.")
             return paths
 
         for key, value in tree_map.items():
-            if isinstance(value, dict) and "content" in value and "last-modifier" in value:
-                new_path = f"{current_path}/{key}" if current_path else key
-                paths.append(new_path)
-            else:
-                new_path = f"{current_path}/{key}" if current_path else key
-                if isinstance(value, dict):
+            new_path = f"{current_path}/{key}" if current_path else key
+            if isinstance(value, dict):
+                # Se è un file con content + last-modifier, consideralo foglia
+                if "content" in value and "last-modifier" in value:
+                    paths.append(new_path)
+                else:
+                    # Altrimenti è una cartella, continua
                     paths.extend(self.extract_file_paths(value, new_path))
-                elif isinstance(value, str):
-                    new_path = f"{current_path}/{key}" if current_path else key
+            elif isinstance(value, str):
+                if not key.startswith("id_"):  # ignora metadati come id_file/id_folder
                     paths.append(new_path)
         return paths
 
@@ -217,65 +245,54 @@ class Repository:
                     print(f"Error creating new file: {path}: {e}")
 
 
-    def update_firestore(self, old_tree, new_tree, repo_name, doc_ref, old_info, new_info, cache_doc, timestamp):
-        repo = self.get_current_repo(repo_name)
-        print(f" update_tree_firestore: {repo_name} - old_tree: {old_tree}, new_tree: {new_tree}, doc_ref: {doc_ref}, old_info: {old_info}, new_info: {new_info}")
+  
 
-        old_paths = set(self.extract_file_paths(old_tree))
-        new_paths = set(self.extract_file_paths(new_tree))
 
-        print(f"File info dict: {new_info}")
-        new_modified_dict = utils.insert_last_modified(new_info, timestamp)["last-modified"]
 
-        doc = doc_ref.get()
-        data = doc.to_dict() or {}
+    def update_firestore(self, event, repo_name, doc_ref, cache_doc, timestamp):
+        MAX_RETRIES = 10
 
-        if "tree" not in data or not isinstance(data["tree"], dict):
-            data["tree"] = {}
-        if "last-modified" not in data or not isinstance(data["last-modified"], dict):
-            data["last-modified"] = {}
+        old_tree, new_tree, old_info, new_info = create_tree_and_infos(event)
+        print(f"Initial tree state for {repo_name} - old_tree: {old_tree}, new_tree: {new_tree}, doc_ref: {doc_ref}, old_info: {old_info}, new_info: {new_info}")
 
-    
+        db = firestore.Client()
+        transaction = db.transaction()
 
-        # ADDED files: files that aren't in old paths
-        added = new_paths - old_paths
-        print("old_paths:", old_paths)
-        print("new_paths:", new_paths)
-        print(f"new_info chiavi: {list(new_info.keys())}")
+        @firestore.transactional
+        def transaction_operation(transaction):
+            doc = doc_ref.get(transaction=transaction)
+            data = doc.to_dict() or {}
 
-        for path in added:
-            print("To add: ", path)
-            file_info = new_info.get(path, {})
-            content = file_info.get("content", "")
-            last_modifier = file_info.get("last-modifier", "")
-            if not content and not last_modifier:
-                file_info = new_modified_dict.get(path, {})
-                content = file_info.get("content", "")
-                last_modifier = file_info.get("last-modifier", "")
-            uuid_cache = str(uuid.uuid4())
+            old_paths = set(self.extract_file_paths(old_tree))
+            new_paths = set(self.extract_file_paths(new_tree))
 
-            print(f"Adding file at {path} with content: {repr(content)} and last modifier: {last_modifier}")
-            set_nested_dict(data["tree"], path, "")
-            data["last-modified"][path] = {
-                "last-modifier": last_modifier,
-                "uuid_cache": uuid_cache,
-                "timestamp": timestamp
+            print(f"Transaction update attempt: {repo_name}")
+            print("Old paths:", old_paths)
+            print("New paths:", new_paths)
+
+            if "tree" not in data or not isinstance(data["tree"], dict):
+                data["tree"] = {}
+            if "last-modified" not in data or not isinstance(data["last-modified"], dict):
+                data["last-modified"] = {}
+
+            modified = {
+                path for path in old_paths & new_paths
+                if new_info.get(path, {}).get("content") != old_info.get(path, {}).get("content")
             }
+            added = (new_paths - old_paths) - modified
+            deleted = (old_paths - new_paths) - modified
 
-            update_cache_in_progress(cache_doc, uuid_cache, content, path, timestamp)
+            print("Modified paths:", modified)
+            print("Added paths:", added)
+            print("Deleted paths:", deleted)
 
-        #MODIFIED files: files that are in both old and new paths
-        modified = old_paths & new_paths
-        for path in modified:
-            if new_info.get(path, {}).get("content") != old_info.get(path, {}).get("content"):
-                print(f"Modifying file at {path} because content has changed {repr(new_info.get(path, {}).get('content'))}")
+            for path in modified:
+                print(f"Modifying file at {path} (content changed)")
                 file_info = new_info.get(path, {})
                 content = file_info.get("content", "")
                 last_modifier = file_info.get("last-modifier", "")
                 uuid_cache = str(uuid.uuid4())
-                print(f"update firestore: last-modifier {last_modifier}")
 
-                print(f"Modified: {path}")
                 data["last-modified"][path] = {
                     "last-modifier": last_modifier,
                     "uuid_cache": uuid_cache,
@@ -284,35 +301,61 @@ class Repository:
 
                 update_cache_in_progress(cache_doc, uuid_cache, content, path, timestamp)
 
-        #DELETED
-        deleted = old_paths - new_paths
-        for path in deleted:
-            print("To delete:", path)
-            try:
-                remove_path_from_tree(data["tree"], path)
-                remove_empty_parents(data["tree"], path)
+            for path in deleted:
+                print("To delete:", path)
+                try:
+                    remove_path_from_tree(data["tree"], path)
+                    remove_empty_parents(data["tree"], path)
+                    data["last-modified"].pop(path, None)
+                    print(f"Deleted: {path}")
+                except Exception as e:
+                    print(f"Error deleting path {path} in transaction: {e}")
 
-                if path in data["last-modified"]:
-                    del data["last-modified"][path]
+            for path in added:
+                print("To add:", path)
+                file_info = new_info.get(path, {})
+                content = file_info.get("content", "")
+                last_modifier = file_info.get("last-modifier", "")
 
-                print(f"Deleted: {path}")
+                if not content and not last_modifier:
+                    file_info = utils.insert_last_modified(new_info, timestamp).get("last-modified", {}).get(path, {})
+                    content = file_info.get("content", "")
+                    last_modifier = file_info.get("last-modifier", "")
 
-            except GoogleCloudError as e:
-                print(f"Error deleting path {path} in Firestore: {e}")
+                uuid_cache = str(uuid.uuid4())
 
-        print(f"Tree after opterations in update friestore: {data}")
+                print(f"Adding file at {path} with content: {repr(content)} and last modifier: {last_modifier}")
+                set_nested_dict(data["tree"], path, "")
+                data["last-modified"][path] = {
+                    "last-modifier": last_modifier,
+                    "uuid_cache": uuid_cache,
+                    "timestamp": timestamp
+                }
 
-        try:
-            doc_ref.update({
+                update_cache_in_progress(cache_doc, uuid_cache, content, path, timestamp)
+
+            print(f"Tree after operations in transaction: {data['tree']}")
+            transaction.update(doc_ref, {
                 "tree": data["tree"],
                 "last-modified": data["last-modified"],
                 "last-edit": timestamp
             })
-            print(f"Firestore document updated successfully for {repo_name}")
-        except GoogleCloudError as e:
-            print(f"Firestore update failed: {e}")
 
-
+        for attempt in range(MAX_RETRIES):
+            try:
+                transaction_operation(transaction)
+                print(f"Firestore document updated successfully for {repo_name}")
+                break
+            except FailedPrecondition as e:
+                print(f"[RACE CONDITION] Transaction failed (attempt {attempt + 1}): {e}")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(0.5 * (attempt + 1))
+                else:
+                    print("[ERROR] Max retries reached. Transaction aborted.")
+                    raise
+            except GoogleAPICallError as e:
+                print(f"[ERROR] Firestore API call failed during transaction: {e}")
+                raise
 
 
 
