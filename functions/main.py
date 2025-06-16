@@ -372,27 +372,7 @@ def onupdate(event: db_fn.Event) -> None:
     except GoogleCloudError as e:
         print(f"Error updating simple fields: {e}")
 
-    print("AFTER keys:", list(event.data.after.keys()))
-    print("AFTER raw:", event.data.after)
-    print("FULL EVENT BEFORE:", event.data.before)
-    print("FULL EVENT AFTER:", event.data.after)
-    old_tree_realtime = event.data.before.get("tree", {})
-    old_tree_structure=utils.split_tree(old_tree_realtime)[0] #split tree to get the structure
-    old_tree=utils.convert_tree_keys(old_tree_structure)
-    print(f"onupdate Old tree: {old_tree}")
-    
-    new_tree_realtime = event.data.after.get("tree", {})
-    new_tree_structure=utils.split_tree(new_tree_realtime)[0] #split tree to get the structure
-    new_tree=utils.convert_tree_keys(new_tree_structure)
-    print(f"onupdate New tree: {new_tree}")
 
-    old_file_info = utils.split_tree(old_tree_realtime)[1]
-    old_file_info_converted = utils.convert_tree_keys(old_file_info) #convert old file info keys to be compatible with firestore
-    print(f"onupdate Old file info: {old_file_info_converted}")
-    
-    new_file_info = utils.split_tree(new_tree_realtime)[1]
-    new_file_info_converted = utils.convert_tree_keys(new_file_info) #convert new file info keys to be compatible with firestore
-    print(f"onupdate New file info: {new_file_info_converted}")
     
     doc_snapshot = doc_ref.get()
     #update tree  for added or removed files and for modified content
@@ -408,10 +388,10 @@ def onupdate(event: db_fn.Event) -> None:
     if before.get("tree") != after.get("tree"):
        
         try:
-            repository.update_firestore(old_tree, new_tree, repo_name, doc_ref, old_file_info_converted, new_file_info_converted, cache_doc, time)
+            repository.update_firestore(event, repo_name, doc_ref, cache_doc, time)
         
         except Exception as e:
-            print(f"Error in update_tree: {e}")
+            print(f"Error in update_firestore: {e}")
 
 
 
