@@ -115,7 +115,7 @@ def remove_empty_parents(tree, path):
 def safe_delete_file(repo, path, max_retries=3):
     for attempt in range(max_retries):
         try:
-            file = repo.get_contents(path)
+            file = repo.get_contents(path)  
             repo.delete_file(file.path, f"Remove {path}", file.sha)
             print(f"Deleted {path}")
             return True
@@ -124,13 +124,12 @@ def safe_delete_file(repo, path, max_retries=3):
                 print(f"File {path} not found on GitHub, skipping deletion.")
                 return True
             elif e.status == 409:
-                print(f"SHA mismatch for {path}. Retrying... ({attempt+1})")
+                print(f"SHA mismatch for {path}. Retrying... ({attempt + 1})")
                 time.sleep(0.5)
             else:
                 raise
     print(f"Failed to delete {path} after {max_retries} attempts.")
     return False
-
 
 def update_cache_in_progress(cache_doc, uuid_cache, content, path, timestamp): #from real-time is always in progress
     try:
@@ -414,6 +413,15 @@ class Repository:
                 safe_delete_file(repo, path)
             except GoogleCloudError as e:
                 print(f"[error] Deleting {path} failed: {e}")
+            except GithubException as e:
+                if e.status == 409:  # SHA mismatch
+                    try:
+                        live_contents = repo.get_contents(path)
+                        repo.delete_file(path, f"Delete {path}", live_contents.sha)
+                    except GithubException as e2:
+                        print(f"[delete] Still failed to delete {path}: {e2}")
+                else:
+                    raise
             clean_cache(path, cache_doc)
 
         # ----------------------
@@ -449,6 +457,7 @@ class Repository:
                     )
 
                 # Create the file on GitHub repository
+                print(f"[add] adding {path}")
                 repo.create_file(path, f"Add {path}, version {uuid_cache}", content)
                 print(f"[add] Successfully created {path}")
             except FailedPrecondition:
@@ -456,6 +465,13 @@ class Repository:
             except GithubException as e:
                 print(f"[github] Failed to create {path}: {e}")
                 failed_status(item, cache_doc)
+                if e.status==409:
+                    time.sleep(1)
+                    
+                    repo.create_file(path, f"Add {path}, version {uuid_cache}", content)
+                    print(f"[add] Successfully created {path}")
+            except GithubException as e2:
+                print(f"[github] Still failed to recreate {path}: {e2}")
 
             clean_cache(path, cache_doc)
 
