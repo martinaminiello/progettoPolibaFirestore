@@ -77,7 +77,8 @@ def project_created(event: firestore_fn.Event) -> None:
     last_modified_info = object_data.get("last-modified") 
   
     #build all files paths from the tree
-    file_paths = repository.extract_file_paths(tree)
+    file_paths = repository.extract_file_paths_with_names(tree)
+    print(f"[project_created] file_paths: {file_paths} ")
   
     cache_doc= utils.create_cache_doc(db)
     if not cache_doc:
@@ -116,16 +117,26 @@ def project_updated(event: firestore_fn.Event) -> None:
     print(f"Old info: {old_info}")
     
  
-    cache_doc= utils.create_cache_doc(db)
+
+    trees_different = old_tree != new_tree
+    infos_different = old_info != new_info
+
+    print(f"Trees different? {trees_different}")
+    print(f"Infos different? {infos_different}")
+
+    cache_doc = utils.create_cache_doc(db)
 
     if cache_doc:
         cache_dict = cache_doc.to_dict().get
     else:
         print("No cache document found.")
 
-    
-    repository.update_tree(old_tree, new_tree, repo_name, doc_ref,old_info, new_info, cache_doc) 
-    
+  
+    if trees_different or infos_different:
+        repository.update_tree(old_tree, new_tree, repo_name, doc_ref, old_info, new_info, cache_doc)
+    else:
+        print("No changes detected in tree or last-modified, update skipped.")
+        
     
 
 
@@ -186,24 +197,31 @@ def oncreate(event: db_fn.Event) -> None:
         try:
             ###FIRESTORE DOCUMENT CREATION WITH TREE ELABORATION###
             tree_real_time=data.get("tree")
-            tree= utils.convert_tree_keys(tree_real_time)  # replaces "_" with "." in tree
-            print(f"Sanitized tree: {tree}")
+            print(f"realtime  tree: {tree_real_time}")
 
             cache_doc= utils.create_cache_doc(db)
+            tree_firestore, last_modified_info = utils.split_tree_with_name(tree_real_time)
 
-            tree_firestore, last_modified_info = utils.split_tree(tree)
-            print("tree_structure:", tree_firestore)
-            last_modified = utils.insert_last_modified(last_modified_info, timestamp)  # set last-modified
-            data["last-modified"] = last_modified["last-modified"] 
-            print(f"Last mod info : {last_modified_info}")
-            
-            for file_path, file_info in last_modified['last-modified'].items():
+            readable_file_info, reverse_map = utils.convert_file_info_keys_to_readable(last_modified_info, tree_firestore)
+
+            last_modified = utils.insert_last_modified(readable_file_info, timestamp)
+            data["last-modified"] = last_modified["last-modified"]
+
+            for readable_path, file_info in last_modified['last-modified'].items():
                 uuid_cache = file_info.get("uuid_cache")
-                content = last_modified_info.get(file_path, {}).get("content")
-            
-                path = file_path
+                
+                internal_path = reverse_map.get(readable_path)
+                if internal_path is None:
+                    print(f"[WARN] No internal path found for {readable_path}")
+                    continue
+
+                content = last_modified_info.get(internal_path, {}).get("content")
+                if content is None:
+                    print(f"[WARN] Content not found for internal path {internal_path}")
+                    continue
+
                 print(f"uuid {uuid_cache}, content {content}")
-                repomanager.update_cache_in_progress(cache_doc, uuid_cache, content, path, timestamp)
+                repomanager.update_cache_in_progress(cache_doc, uuid_cache, content, readable_path, timestamp)
 
             data["tree"] = tree_firestore  # realtime tree is converted to firestore tree
             data["last-edit"] = timestamp
@@ -384,7 +402,7 @@ def onupdate(event: db_fn.Event) -> None:
     else:
         print("No cache document found.")
         
-
+    print(f" before tree: {before.get("tree")}, after tree: {after.get("tree")}")
     if before.get("tree") != after.get("tree"):
        
         try:
