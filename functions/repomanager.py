@@ -36,6 +36,44 @@ def is_cache_stable(cache_doc, idle_seconds=2):
             return False
     return True
 
+def ensure_folders_exist_with_names(tree, path, new_realtime_tree):
+    print(f"\n🛠️  [DEBUG] Inizio ensure_folders_exist_with_names per path: {path}")
+
+    parts = path.split('/')
+    subpath = ""
+    current_tree = tree
+    current_info = new_realtime_tree
+
+    for i, part in enumerate(parts[:-1]):  # Solo le cartelle, non il file finale
+        subpath = f"{subpath}/{part}" if subpath else part
+        print(f"➡️  [DEBUG] Processing folder: '{part}' | Subpath: '{subpath}'")
+
+        # Se la cartella non esiste, la inizializziamo come dict
+        if part not in current_tree or not isinstance(current_tree[part], dict):
+            print(f"📁  [DEBUG] Cartella '{part}' non trovata in tree, creata nuova.")
+            current_tree[part] = {}
+
+        # Navigazione nel new_realtime_tree per recuperare il _name
+        if part in current_info and isinstance(current_info[part], dict):
+            current_info = current_info[part]
+            folder_name = current_info.get("_name")
+            if folder_name:
+                current_tree[part]["_name"] = folder_name
+                print(f"🏷️  [DEBUG] Assegnato _name '{folder_name}' a cartella '{part}'")
+            else:
+                print(f"⚠️  [DEBUG] _name non trovato per '{part}'")
+        else:
+            print(f"❌  [DEBUG] '{part}' non trovato in new_realtime_tree — interrompo")
+            break
+
+        # Avanziamo nel livello del tree
+        current_tree = current_tree[part]
+
+    print("🌳 [DEBUG] Stato parziale del tree dopo ensure_folders_exist_with_names:")
+    import json
+    print(json.dumps(tree, indent=2))
+
+
 
 
 def create_tree_and_infos(event):
@@ -99,6 +137,7 @@ def set_nested_dict(tree, path, value):
     else:
         # File: sovrascrivi direttamente
         d[last_key] = value
+
 
 
         # utility function: remove path from tree
@@ -238,24 +277,27 @@ class Repository:
 
 
     def extract_file_paths(self, tree_map, current_path=""):
-        paths = []
+            paths = []
 
-        if not isinstance(tree_map, dict):
+            if not isinstance(tree_map, dict):
+                return paths
+
+            for key, value in tree_map.items():
+                new_path = f"{current_path}/{key}" if current_path else key
+                if isinstance(value, dict):
+                    # Se è un file (foglia) con contenuto e modificatore
+                    if "content" in value and "last-modifier" in value:
+                        paths.append(new_path)
+                    else:
+                        # Ricorsione su sotto-cartella
+                        paths.extend(self.extract_file_paths(value, new_path))
+                elif isinstance(value, str):
+                    # ✅ Ignora chiavi speciali come _name o id_*
+                    if not key.startswith("id_") and key != "_name":
+                        paths.append(new_path)
+
             return paths
 
-        for key, value in tree_map.items():
-            new_path = f"{current_path}/{key}" if current_path else key
-            if isinstance(value, dict):
-                # Se è un file con content + last-modifier, consideralo foglia
-                if "content" in value and "last-modifier" in value:
-                    paths.append(new_path)
-                else:
-                    # Altrimenti è una cartella, continua
-                    paths.extend(self.extract_file_paths(value, new_path))
-            elif isinstance(value, str):
-                if not key.startswith("id_"):  # ignora metadati come id_file/id_folder
-                    paths.append(new_path)
-        return paths
     
     def extract_file_paths_with_names(self, tree_map, current_path=""):
         paths = []
@@ -286,6 +328,14 @@ class Repository:
 
         return paths
 
+    def get_name_from_path(self,realtTime_tree, path):
+        parts = path.split("/")
+        current = realtTime_tree
+        for part in parts:
+            if part not in current:
+                return None  # invalid path
+            current = current[part]
+        return current.get("_name", None)
 
 
     
@@ -401,22 +451,26 @@ class Repository:
 
         return renamed
 
-    def get_named_path(self,tree, path):
-      
+    def get_named_path(self, tree, path):
         parts = path.split("/")
         named_parts = []
         current = tree
 
         for part in parts:
             if part not in current:
-                raise KeyError(f"'{part}' non trovato nel tree")
+                raise KeyError(f"[ERROR] '{part}' non trovato nel tree a questo livello: {current.keys()}")
+
             node = current[part]
 
-            # Aggiunge il valore di "_name" se esiste, altrimenti la chiave grezza
-            named_parts.append(node.get("_name", part))
-
-            # Scende nel livello successivo se è un dizionario
-            current = node if isinstance(node, dict) else {}
+            if isinstance(node, dict):
+                # Aggiunge il valore di "_name" se esiste, altrimenti usa la chiave grezza
+                named_parts.append(node.get("_name", part))
+                current = node
+            else:
+                # Nodo non è un dizionario: può essere una stringa (errore di struttura)
+                print(f"[WARNING] Nodo '{part}' non è un dizionario: tipo={type(node)}, valore={node}")
+                named_parts.append(part)
+                current = {}  # Per evitare altri errori
 
         return "/".join(named_parts)
 
@@ -516,7 +570,7 @@ class Repository:
                     or old_named_path != new_named_path
                 ):
                     modified.add(path)
-
+            #deleting old paths that now have a different name
             added = (new_paths - old_paths) - modified
             deleted = (old_paths - new_paths) - modified
 
@@ -564,9 +618,14 @@ class Repository:
 
             for path in added:
                 print("To add:", path)
+                
+                ensure_folders_exist_with_names(data["tree"], path, new_tree_realtime)
+                named_path=self.get_named_path(new_tree_realtime, path)
+                print(f"proper name is: {named_path}")
                 file_info = new_info.get(path, {})
                 content = file_info.get("content", "")
                 last_modifier = file_info.get("last-modifier", "")
+                new_file_name=self.get_name_from_path(new_tree_realtime,path)
 
                 if not content and not last_modifier:
                     file_info = utils.insert_last_modified(new_info, timestamp).get("last-modified", {}).get(path, {})
@@ -576,14 +635,14 @@ class Repository:
                 uuid_cache = str(uuid.uuid4())
 
                 print(f"Adding file at {path} with content: {repr(content)} and last modifier: {last_modifier}")
-                set_nested_dict(data["tree"], path, "")
-                data["last-modified"][path] = {
+                set_nested_dict(data["tree"], path, new_file_name or "") #yu should put name of new file here
+                data["last-modified"][named_path] = {
                     "last-modifier": last_modifier,
                     "uuid_cache": uuid_cache,
                     "timestamp": timestamp
                 }
 
-                update_cache_in_progress(cache_doc, uuid_cache, content, path, timestamp)
+                update_cache_in_progress(cache_doc, uuid_cache, content, named_path, timestamp)
 
             print(f"Tree after operations in transaction: {data['tree']}")
             transaction.update(doc_ref, {
