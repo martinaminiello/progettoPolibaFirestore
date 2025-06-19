@@ -105,6 +105,7 @@ def project_updated(event: firestore_fn.Event) -> None:
     doc_ref = db.collection(Collection_name).document(project_id)
     doc_snapshot = doc_ref.get()
     repo_name = doc_snapshot.get("repo_uuid")
+    repo=repository.get_current_repo(repo_name)
 
     old_tree = event.data.before.to_dict().get("tree", {})
     print(f"Old tree: {old_tree}")
@@ -116,24 +117,66 @@ def project_updated(event: firestore_fn.Event) -> None:
     old_info=event.data.before.to_dict().get("last-modified", {})
     print(f"Old info: {old_info}")
     
+
+    old_paths = set(repository.extract_paths(old_tree))
+    new_paths = set(repository.extract_paths(new_tree))
+
  
 
     trees_different = old_tree != new_tree
-    infos_different = old_info != new_info
+  
 
     print(f"Trees different? {trees_different}")
-    print(f"Infos different? {infos_different}")
+    
 
     cache_doc = utils.create_cache_doc(db)
+    snapshot = cache_doc.reference.get()
+    queue_items = snapshot.to_dict().get("queue_item", [])
+    print(f"on project updated queue: {queue_items}")
 
+    
+    modified_content_paths = []
+
+    # Intersezione tra old e new paths: quelli che esistono sia su GitHub sia nel nuovo tree
+    intersecting_paths = old_paths.intersection(new_paths)
+    print(f"inetrsecting paths  {intersecting_paths}")
+
+    for path in intersecting_paths:
+        try:
+            print(f"Retrievieng content from  {path}")
+
+            file_content = repo.get_contents(path)
+            content_str = file_content.decoded_content.decode('utf-8')
+            print(f"content retrieved : {content_str}")
+        except GithubException as e:
+            print(f"Error retrieving content from GitHub for {path}: {e}")
+            continue
+
+        # uuid_cache si prende dal NEW info, perché è lo stato più aggiornato
+        uuid_cache = new_info.get(path, {}).get("uuid_cache")
+        print(f"UUID new from path {path}: {uuid_cache}")
+        if not uuid_cache:
+            print(f"No uuid_cache found for {path} in new_info.")
+            continue
+
+        # Confronta con ogni item in coda
+        for item in queue_items:
+            if item.get("uuid_cache") == uuid_cache:
+                if item.get("content") != content_str:
+                    modified_content_paths.append(path)
+                break
+
+
+
+    print(f"modified content: {modified_content_paths}")
     if cache_doc:
         cache_dict = cache_doc.to_dict().get
     else:
         print("No cache document found.")
 
   
-    if trees_different or infos_different:
-        repository.update_tree(old_tree, new_tree, repo_name, doc_ref, old_info, new_info, cache_doc)
+    if trees_different  or modified_content_paths:
+        repository.update_tree(old_tree, new_tree, repo_name, doc_ref, old_info, new_info, cache_doc, modified_content_paths)
     else:
         print("No changes detected in tree or last-modified, update skipped.")
         

@@ -645,11 +645,25 @@ class Repository:
                 id_to_path[file_id] = file_path
 
         return id_to_path
+    
+    def extract_paths_from_firestoreTree(self, firestore_tree, current_path=""):
+        paths = []
+        for key, value in firestore_tree.items():
+            if key.startswith("f_"):
+                file_path = f"{current_path}/{value}" if current_path else value
+                paths.append(file_path)
+            elif key.startswith("d_"):
+                subfolder = value
+                folder_name = subfolder.get("_name", key)
+                new_path = f"{current_path}/{folder_name}" if current_path else folder_name
+                paths.extend(self.extract_paths_from_firestoreTree(subfolder, new_path))
+        return paths
+
 
     
 
 
-    def update_tree(self, old_tree, new_tree, repo_name, doc_ref, old_info, new_info, cache_doc):
+    def update_tree(self, old_tree, new_tree, repo_name, doc_ref, old_info, new_info, cache_doc, modified_content_paths):
         repo = self.get_current_repo(repo_name)
         print(f"[update_tree] {repo_name} | old_tree: {old_tree}, new_tree: {new_tree}, newinfo {new_info}")
 
@@ -711,6 +725,8 @@ class Repository:
                 snapshot = cache_doc.reference.get()
                 update_time = snapshot.update_time
                 queue_items = snapshot.to_dict().get("queue_item", [])
+                print(f"queue items: {queue_items}")
+                print(f"info uuid: {uuid_cache}")
 
                 for item in queue_items:
                     if item.get("uuid_cache") == uuid_cache:
@@ -722,9 +738,20 @@ class Repository:
                     continue
 
                 # Delete the old file and create the new one with the content
-                file = repo.get_contents(old_path)
-                repo.delete_file(old_path, f"Rename {old_path} to {new_path}", file.sha)
+                try:
+                    print(f"getting content of {old_path} to delete")
+                    file = repo.get_contents(old_path)
+                except GithubException as e:
+                    if e.status == 404:
+                        print(f"[warn] Old path {old_path} does not exist (404), skipping rename")
+                        continue
+                    else:
+                        raise
+                print(f"Deleting.. {old_path}")
+                repo.delete_file(old_path, f"Rename {old_path} to {new_path}", file.sha) #delete is slower tan creation
+                print(f"Creating.. {new_path}")
                 repo.create_file(new_path, f"Rename {old_path} to {new_path}", content)
+                time.sleep(5)
 
                 print(f"[rename] Successfully renamed {old_path} -> {new_path}")
                 clean_cache(old_path, cache_doc)
@@ -808,19 +835,27 @@ class Repository:
         # ------------------------
         # Handle Modified Files
         # ------------------------
-        for path in old_paths & new_paths:
+        #check differnce old and new path
+        
+       
+        print(f"queue items: {queue_items} ")
+        for path in modified_content_paths:
+           
+
+            
+         
+            
+           
+         
+
             old_uuid = old_info.get(path, {}).get("uuid_cache")
             new_uuid = new_info.get(path, {}).get("uuid_cache")
-            old_content = old_info.get(path, {}).get("content")
-            new_content = new_info.get(path, {}).get("content")
-            print(f"old uuid {old_uuid}, new uuid {new_uuid}")
-            print(f"old content {old_content}, new content {new_content}")
-
+           
+           
 
             if old_uuid == new_uuid:
                 continue  # No change
-            if old_content== new_content:
-                continue
+          
 
             print(f"[modify] Updating {path}")
             for attempt in range(10):
@@ -869,22 +904,3 @@ class Repository:
             print(f"Repository {repo_name} deleted successfully")
         except GithubException as e:
             print(f"Error deleting {repo}: {e}")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
