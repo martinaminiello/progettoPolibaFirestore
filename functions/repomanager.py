@@ -166,20 +166,37 @@ def remove_path_from_tree(tree, path):
             return  # path not found
     d.pop(parts[-1], None)
 
+
 def remove_empty_parents(tree, path):
+    def is_empty_folder(folder):
+        # Cartella vuota se ha solo '_name' o è completamente vuota
+        return all(k == "_name" for k in folder.keys())
+    
     parts = path.split('/')
+    
+    # Risali la gerarchia togliendo l'ultimo elemento (file o cartella)
     for i in reversed(range(1, len(parts))):
-        sub_path = parts[:i]
+        subpath = parts[:i]
         d = tree
         valid = True
-        for part in sub_path:
+        for part in subpath:
             if part in d and isinstance(d[part], dict):
                 d = d[part]
             else:
                 valid = False
                 break
-        if valid and not d:
-            remove_path_from_tree(tree, '/'.join(sub_path))
+        if valid and is_empty_folder(d):
+            # Rimuovo la cartella vuota
+            parent = tree
+            for p in subpath[:-1]:
+                parent = parent[p]
+            removed = parent.pop(subpath[-1], None)
+            print(f"[DEBUG] Rimosso folder vuota: {'/'.join(subpath)}")
+        else:
+            # Se trovo una cartella non vuota o path non valido, esco
+            break
+
+
 
 
 
@@ -901,11 +918,6 @@ class Repository:
         for path in modified_content_paths:
            
 
-            
-         
-            
-           
-         
 
             old_uuid = old_info.get(path, {}).get("uuid_cache")
             new_uuid = new_info.get(path, {}).get("uuid_cache")

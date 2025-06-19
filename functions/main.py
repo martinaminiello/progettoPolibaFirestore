@@ -137,48 +137,50 @@ def project_updated(event: firestore_fn.Event) -> None:
     
     modified_content_paths = []
 
-    # Intersezione tra old e new paths: quelli che esistono sia su GitHub sia nel nuovo tree
-    intersecting_paths = old_paths.intersection(new_paths)
-    print(f"inetrsecting paths  {intersecting_paths}")
+    if queue_items:
+        intersecting_paths = old_paths.intersection(new_paths)
+        print(f"inetrsecting paths  {intersecting_paths}")
 
-    for path in intersecting_paths:
-        try:
-            print(f"Retrievieng content from  {path}")
+        for path in intersecting_paths:
+            try:
+                print(f"Retrievieng content from  {path}")
 
-            file_content = repo.get_contents(path)
-            content_str = file_content.decoded_content.decode('utf-8')
-            print(f"content retrieved : {content_str}")
-        except GithubException as e:
-            print(f"Error retrieving content from GitHub for {path}: {e}")
-            continue
+                file_content = repo.get_contents(path)
+                content_str = file_content.decoded_content.decode('utf-8')
+                print(f"content retrieved : {content_str}")
+            except GithubException as e:
+                print(f"Error retrieving content from GitHub for {path}: {e}")
+                continue
 
-        # uuid_cache si prende dal NEW info, perché è lo stato più aggiornato
-        uuid_cache = new_info.get(path, {}).get("uuid_cache")
-        print(f"UUID new from path {path}: {uuid_cache}")
-        if not uuid_cache:
-            print(f"No uuid_cache found for {path} in new_info.")
-            continue
+            # uuid_cache from new info
+            uuid_cache = new_info.get(path, {}).get("uuid_cache")
+            print(f"UUID new from path {path}: {uuid_cache}")
+            if not uuid_cache:
+                print(f"No uuid_cache found for {path} in new_info.")
+                continue
 
-        # Confronta con ogni item in coda
-        for item in queue_items:
-            if item.get("uuid_cache") == uuid_cache:
-                if item.get("content") != content_str:
-                    modified_content_paths.append(path)
-                break
+            # compare with queue item
+            for item in queue_items:
+                if item.get("uuid_cache") == uuid_cache:
+                    if item.get("content") != content_str:
+                        modified_content_paths.append(path)
+                    break
 
 
 
-    print(f"modified content: {modified_content_paths}")
-    if cache_doc:
-        cache_dict = cache_doc.to_dict().get
+        print(f"modified content: {modified_content_paths}")
+        if cache_doc:
+            cache_dict = cache_doc.to_dict().get
+        else:
+            print("No cache document found.")
+
+    
+        if trees_different  or modified_content_paths:
+            repository.update_tree(old_tree, new_tree, repo_name, doc_ref, old_info, new_info, cache_doc, modified_content_paths)
+        else:
+            print("No changes detected in tree or last-modified, update skipped.")
     else:
-        print("No cache document found.")
-
-  
-    if trees_different  or modified_content_paths:
-        repository.update_tree(old_tree, new_tree, repo_name, doc_ref, old_info, new_info, cache_doc, modified_content_paths)
-    else:
-        print("No changes detected in tree or last-modified, update skipped.")
+        print("No items in the queue. No content was modified")
         
     
 
