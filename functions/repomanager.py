@@ -1,6 +1,7 @@
 import os
 import uuid
 import datetime
+import json
 import time
 from github import GithubException
 from google.cloud.exceptions import GoogleCloudError
@@ -37,40 +38,39 @@ def is_cache_stable(cache_doc, idle_seconds=2):
     return True
 
 def ensure_folders_exist_with_names(tree, path, new_realtime_tree):
-    print(f"\n🛠️  [DEBUG] Inizio ensure_folders_exist_with_names per path: {path}")
+    print(f"\n[DEBUG] Inizio ensure_folders_exist_with_names per path: {path}")
 
     parts = path.split('/')
     subpath = ""
     current_tree = tree
     current_info = new_realtime_tree
 
-    for i, part in enumerate(parts[:-1]):  # Solo le cartelle, non il file finale
+    for i, part in enumerate(parts[:-1]):  
         subpath = f"{subpath}/{part}" if subpath else part
-        print(f"➡️  [DEBUG] Processing folder: '{part}' | Subpath: '{subpath}'")
+        print(f"[DEBUG] Processing folder: '{part}' | Subpath: '{subpath}'")
 
-        # Se la cartella non esiste, la inizializziamo come dict
+        
         if part not in current_tree or not isinstance(current_tree[part], dict):
-            print(f"📁  [DEBUG] Cartella '{part}' non trovata in tree, creata nuova.")
+            print(f"[DEBUG] Cartella '{part}' non trovata in tree, creata nuova.")
             current_tree[part] = {}
 
-        # Navigazione nel new_realtime_tree per recuperare il _name
+       
         if part in current_info and isinstance(current_info[part], dict):
             current_info = current_info[part]
             folder_name = current_info.get("_name")
             if folder_name:
                 current_tree[part]["_name"] = folder_name
-                print(f"🏷️  [DEBUG] Assegnato _name '{folder_name}' a cartella '{part}'")
+                print(f"[DEBUG] Assegnato _name '{folder_name}' a cartella '{part}'")
             else:
-                print(f"⚠️  [DEBUG] _name non trovato per '{part}'")
+                print(f"[DEBUG] _name non trovato per '{part}'")
         else:
-            print(f"❌  [DEBUG] '{part}' non trovato in new_realtime_tree — interrompo")
+            print(f"[DEBUG] '{part}' non trovato in new_realtime_tree — interrompo")
             break
 
-        # Avanziamo nel livello del tree
+       
         current_tree = current_tree[part]
 
-    print("🌳 [DEBUG] Stato parziale del tree dopo ensure_folders_exist_with_names:")
-    import json
+    print("[DEBUG] Stato parziale del tree dopo ensure_folders_exist_with_names:")
     print(json.dumps(tree, indent=2))
 
 
@@ -119,7 +119,7 @@ def create_tree_and_infos_names(event):
     return old_tree_structure, new_tree_structure, old_file_info, new_file_info
 
 
-def set_nested_dict(tree, path, value):
+def set_nested_dict(tree, path, value): #for renominatio
     parts = path.split('/')
     d = tree
     for part in parts[:-1]:
@@ -129,28 +129,27 @@ def set_nested_dict(tree, path, value):
 
     last_key = parts[-1]
 
-    # Se il value è un dict, aggiorna (tipico delle cartelle)
+   
     if isinstance(value, dict):
         if last_key not in d or not isinstance(d[last_key], dict):
             d[last_key] = {}
         d[last_key].update(value)
     else:
-        # File: sovrascrivi direttamente
+        
         d[last_key] = value
 
 
 
-        # utility function: remove path from tree
 def extract_all_paths(tree_map, current_path=""):
     paths = []
 
     for key, value in tree_map.items():
         new_path = f"{current_path}/{key}" if current_path else key
         if isinstance(value, dict):
-            # Se è dict, ricorsivamente estrai solo i file
+    
             paths.extend(extract_all_paths(value, new_path))
         else:
-            # Se non è dict, è un file (o nodo foglia)
+          
             paths.append(new_path)
 
     return paths
@@ -169,12 +168,12 @@ def remove_path_from_tree(tree, path):
 
 def remove_empty_parents(tree, path):
     def is_empty_folder(folder):
-        # Cartella vuota se ha solo '_name' o è completamente vuota
+        # folder is empty if only _name is in it
         return all(k == "_name" for k in folder.keys())
     
     parts = path.split('/')
     
-    # Risali la gerarchia togliendo l'ultimo elemento (file o cartella)
+   
     for i in reversed(range(1, len(parts))):
         subpath = parts[:i]
         d = tree
@@ -193,7 +192,7 @@ def remove_empty_parents(tree, path):
             removed = parent.pop(subpath[-1], None)
             print(f"[DEBUG] Rimosso folder vuota: {'/'.join(subpath)}")
         else:
-            # Se trovo una cartella non vuota o path non valido, esco
+      
             break
 
 
@@ -302,14 +301,14 @@ class Repository:
             for key, value in tree_map.items():
                 new_path = f"{current_path}/{key}" if current_path else key
                 if isinstance(value, dict):
-                    # Se è un file (foglia) con contenuto e modificatore
+              
                     if "content" in value and "last-modifier" in value:
                         paths.append(new_path)
                     else:
-                        # Ricorsione su sotto-cartella
+                      
                         paths.extend(self.extract_file_paths(value, new_path))
                 elif isinstance(value, str):
-                    # ✅ Ignora chiavi speciali come _name o id_*
+                 
                     if not key.startswith("id_") and key != "_name":
                         paths.append(new_path)
 
@@ -324,23 +323,23 @@ class Repository:
 
         for key, value in tree_map.items():
             if key == "_name":
-                # Ignoro il nome della cartella stessa, serve solo per leggibilità
+             
                 continue
 
             if isinstance(value, str):
-                # È un file: value è il nome leggibile del file
+            
                 file_path = f"{current_path}/{value}" if current_path else value
                 paths.append(file_path)
 
             elif isinstance(value, dict):
-                # È una cartella: ricorsione
+           
                 folder_name = value.get("_name", key)
                 new_path = f"{current_path}/{folder_name}" if current_path else folder_name
                 sub_paths = self.extract_file_paths_with_names(value, new_path)
                 paths.extend(sub_paths)
 
             else:
-                # Caso anomalo, logga per debug
+              
                 print(f"[WARN] Nodo non dict e non string: {key} -> {value}")
 
         return paths
@@ -363,7 +362,7 @@ class Repository:
         print(f"Repo name: {repo_name}")
         repo = self.get_current_repo(repo_name)
 
-        # Ensure last_modified_info is always a dict
+ 
         if last_modified_info is None:
             last_modified_info = {}
         print(f"Last modified info: {last_modified_info}")
@@ -415,7 +414,7 @@ class Repository:
                     new_sub = new_node[key]
 
                     if isinstance(old_sub, dict) and isinstance(new_sub, dict):
-                        full_path = f"{current_path}/{key}" if current_path else key  # <- Spostato fuori
+                        full_path = f"{current_path}/{key}" if current_path else key 
 
                         old_name = old_sub.get("_name")
                         new_name = new_sub.get("_name")
@@ -480,14 +479,14 @@ class Repository:
             node = current[part]
 
             if isinstance(node, dict):
-                # Aggiunge il valore di "_name" se esiste, altrimenti usa la chiave grezza
+            
                 named_parts.append(node.get("_name", part))
                 current = node
             else:
-                # Nodo non è un dizionario: può essere una stringa (errore di struttura)
+                
                 print(f"[WARNING] Nodo '{part}' non è un dizionario: tipo={type(node)}, valore={node}")
                 named_parts.append(part)
-                current = {}  # Per evitare altri errori
+                current = {} 
 
         return "/".join(named_parts)
 
@@ -608,10 +607,8 @@ class Repository:
                 print(f"names path {names_path}")
                 print(f"path {path}")
 
-                # Aggiorna anche il nome nel tree!
+                # updates tree name
                 set_nested_dict(data["tree"], path, file_info.get("_name", ""))
-
-                #serve altro
 
              
                 print(f"path in modified : {names_path}")
@@ -628,7 +625,8 @@ class Repository:
                 try:
                     remove_path_from_tree(data["tree"], path)
                     remove_empty_parents(data["tree"], path)
-                    data["last-modified"].pop(path, None)
+                    named_path = self.get_named_path(old_tree_realtime, path)
+                    data["last-modified"].pop(named_path, None)
                     print(f"Deleted: {path}")
                 except Exception as e:
                     print(f"Error deleting path {path} in transaction: {e}")
@@ -689,17 +687,17 @@ class Repository:
 
         for key, value in tree.items():
             if key.startswith("d_") and isinstance(value, dict):
-                # Cartella: prendo il nome della cartella da _name
+              
                 folder_name = value.get("_name", "")
-                # Nuovo path di partenza
+             
                 new_parent_path = f"{parent_path}/{folder_name}" if parent_path else folder_name
-                # Ricorsione sulla sottocartella
+               
                 paths.extend(self.extract_paths(value, new_parent_path))
 
             elif key.startswith("f_"):
-                # File: valore è il nome del file
+               
                 file_name = value
-                # Creo il path completo
+            
                 file_path = f"{parent_path}/{file_name}" if parent_path else file_name
                 paths.append(file_path)
 
@@ -911,7 +909,6 @@ class Repository:
         # ------------------------
         # Handle Modified Files
         # ------------------------
-        #check differnce old and new path
         
        
         print(f"queue items: {queue_items} ")

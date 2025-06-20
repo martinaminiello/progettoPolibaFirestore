@@ -135,6 +135,7 @@ def project_updated(event: firestore_fn.Event) -> None:
     print(f"on project updated queue: {queue_items}")
 
     
+    #MODIFIED PATHS IN CONTENT ONLY
     modified_content_paths = []
 
     if queue_items:
@@ -175,12 +176,12 @@ def project_updated(event: firestore_fn.Event) -> None:
             print("No cache document found.")
 
     
-        if trees_different  or modified_content_paths:
+    if trees_different  or modified_content_paths:
+            print("Entering if to update tree")
             repository.update_tree(old_tree, new_tree, repo_name, doc_ref, old_info, new_info, cache_doc, modified_content_paths)
-        else:
-            print("No changes detected in tree or last-modified, update skipped.")
     else:
-        print("No items in the queue. No content was modified")
+        print("No changes detected in tree or in the queue.")
+   
         
     
 
