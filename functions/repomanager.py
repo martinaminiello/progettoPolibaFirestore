@@ -37,165 +37,6 @@ def is_cache_stable(cache_doc, idle_seconds=2):
             return False
     return True
 
-def ensure_folders_exist_with_names(tree, path, new_realtime_tree):
-    print(f"\n[DEBUG] Inizio ensure_folders_exist_with_names per path: {path}")
-
-    parts = path.split('/')
-    subpath = ""
-    current_tree = tree
-    current_info = new_realtime_tree
-
-    for i, part in enumerate(parts[:-1]):  
-        subpath = f"{subpath}/{part}" if subpath else part
-        print(f"[DEBUG] Processing folder: '{part}' | Subpath: '{subpath}'")
-
-        
-        if part not in current_tree or not isinstance(current_tree[part], dict):
-            print(f"[DEBUG] Cartella '{part}' non trovata in tree, creata nuova.")
-            current_tree[part] = {}
-
-       
-        if part in current_info and isinstance(current_info[part], dict):
-            current_info = current_info[part]
-            folder_name = current_info.get("_name")
-            if folder_name:
-                current_tree[part]["_name"] = folder_name
-                print(f"[DEBUG] Assegnato _name '{folder_name}' a cartella '{part}'")
-            else:
-                print(f"[DEBUG] _name non trovato per '{part}'")
-        else:
-            print(f"[DEBUG] '{part}' non trovato in new_realtime_tree — interrompo")
-            break
-
-       
-        current_tree = current_tree[part]
-
-    print("[DEBUG] Stato parziale del tree dopo ensure_folders_exist_with_names:")
-    print(json.dumps(tree, indent=2))
-
-
-
-
-def create_tree_and_infos(event):
-    old_tree_realtime = event.data.before.get("tree", {})
-    old_tree_structure=utils.split_tree(old_tree_realtime)[0] #split tree to get the structure
-    old_tree=utils.convert_tree_keys(old_tree_structure)
-    print(f" Old tree: {old_tree}")
-        
-    new_tree_realtime = event.data.after.get("tree", {})
-    new_tree_structure=utils.split_tree(new_tree_realtime)[0] #split tree to get the structure
-    new_tree=utils.convert_tree_keys(new_tree_structure)
-    print(f" New tree: {new_tree}")
-
-    old_file_info = utils.split_tree(old_tree_realtime)[1]
-    old_file_info_converted = utils.convert_tree_keys(old_file_info) #convert old file info keys to be compatible with firestore
-    print(f" Old file info: {old_file_info_converted}")
-        
-    new_file_info = utils.split_tree(new_tree_realtime)[1]
-    new_file_info_converted = utils.convert_tree_keys(new_file_info) #convert new file info keys to be compatible with firestore
-    print(f" New file info: {new_file_info_converted}")
-
-    return old_tree, new_tree, old_file_info_converted, new_file_info_converted
-
-
-def create_tree_and_infos_names(event):
-    old_tree_realtime = event.data.before.get("tree", {})
-    print(f"[create_tree_and_infoS_names] old realtime tree: {old_tree_realtime}")
-    old_tree_structure=utils.split_tree_with_name(old_tree_realtime)[0] #split tree to get the structure
-   
-    print(f" Old tree: {old_tree_structure}")
-        
-    new_tree_realtime = event.data.after.get("tree", {})
-    new_tree_structure=utils.split_tree_with_name(new_tree_realtime)[0] #split tree to get the structure
-    
-    print(f" New tree: {new_tree_structure}")
-
-    old_file_info = utils.split_tree_with_name(old_tree_realtime)[1]
-    print(f" Old file info: {old_file_info}")
-        
-    new_file_info = utils.split_tree_with_name(new_tree_realtime)[1]
-    print(f" New file info: {new_file_info}")
-
-    return old_tree_structure, new_tree_structure, old_file_info, new_file_info
-
-
-def set_nested_dict(tree, path, value): #for renominatio
-    parts = path.split('/')
-    d = tree
-    for part in parts[:-1]:
-        if part not in d or not isinstance(d[part], dict):
-            d[part] = {}
-        d = d[part]
-
-    last_key = parts[-1]
-
-   
-    if isinstance(value, dict):
-        if last_key not in d or not isinstance(d[last_key], dict):
-            d[last_key] = {}
-        d[last_key].update(value)
-    else:
-        
-        d[last_key] = value
-
-
-
-def extract_all_paths(tree_map, current_path=""):
-    paths = []
-
-    for key, value in tree_map.items():
-        new_path = f"{current_path}/{key}" if current_path else key
-        if isinstance(value, dict):
-    
-            paths.extend(extract_all_paths(value, new_path))
-        else:
-          
-            paths.append(new_path)
-
-    return paths
-
-
-def remove_path_from_tree(tree, path):
-    parts = path.split('/')
-    d = tree
-    for part in parts[:-1]:
-        if part in d and isinstance(d[part], dict):
-            d = d[part]
-        else:
-            return  # path not found
-    d.pop(parts[-1], None)
-
-
-def remove_empty_parents(tree, path):
-    def is_empty_folder(folder):
-        # folder is empty if only _name is in it
-        return all(k == "_name" for k in folder.keys())
-    
-    parts = path.split('/')
-    
-   
-    for i in reversed(range(1, len(parts))):
-        subpath = parts[:i]
-        d = tree
-        valid = True
-        for part in subpath:
-            if part in d and isinstance(d[part], dict):
-                d = d[part]
-            else:
-                valid = False
-                break
-        if valid and is_empty_folder(d):
-            # Rimuovo la cartella vuota
-            parent = tree
-            for p in subpath[:-1]:
-                parent = parent[p]
-            removed = parent.pop(subpath[-1], None)
-            print(f"[DEBUG] Rimosso folder vuota: {'/'.join(subpath)}")
-        else:
-      
-            break
-
-
 
 
 
@@ -291,69 +132,6 @@ class Repository:
                 print(f"Repository already exists! No need to create another one")
                 return
 
-
-    def extract_file_paths(self, tree_map, current_path=""):
-            paths = []
-
-            if not isinstance(tree_map, dict):
-                return paths
-
-            for key, value in tree_map.items():
-                new_path = f"{current_path}/{key}" if current_path else key
-                if isinstance(value, dict):
-              
-                    if "content" in value and "last-modifier" in value:
-                        paths.append(new_path)
-                    else:
-                      
-                        paths.extend(self.extract_file_paths(value, new_path))
-                elif isinstance(value, str):
-                 
-                    if not key.startswith("id_") and key != "_name":
-                        paths.append(new_path)
-
-            return paths
-
-    
-    def extract_file_paths_with_names(self, tree_map, current_path=""):
-        paths = []
-
-        if not isinstance(tree_map, dict):
-            return paths
-
-        for key, value in tree_map.items():
-            if key == "_name":
-             
-                continue
-
-            if isinstance(value, str):
-            
-                file_path = f"{current_path}/{value}" if current_path else value
-                paths.append(file_path)
-
-            elif isinstance(value, dict):
-           
-                folder_name = value.get("_name", key)
-                new_path = f"{current_path}/{folder_name}" if current_path else folder_name
-                sub_paths = self.extract_file_paths_with_names(value, new_path)
-                paths.extend(sub_paths)
-
-            else:
-              
-                print(f"[WARN] Nodo non dict e non string: {key} -> {value}")
-
-        return paths
-
-    def get_name_from_path(self,realtTime_tree, path):
-        parts = path.split("/")
-        current = realtTime_tree
-        for part in parts:
-            if part not in current:
-                return None  # invalid path
-            current = current[part]
-        return current.get("_name", None)
-
-
     
 
 
@@ -394,354 +172,20 @@ class Repository:
                     print(f"File already exists: {path}")
                 else:
                     print(f"Error creating new file: {path}: {e}")
+            except Exception as e:
+                print(f"Unexpected error: {e}")
 
-    def build_nested_update(self,path, value):
-        parts = path.split('/')
-        update_dict = current = {}
-        for part in parts[:-1]:
-            current[part] = {}
-            current = current[part]
-        current[parts[-1]] = value
-        return update_dict
+                    
 
 
 
-    def detect_and_apply_renames(self, old_tree, new_tree, doc_ref, db):
-        def recurse(old_node, new_node, current_path):
-            for key in new_node:
-                if key.startswith(('f_', 'd_')) and key in old_node:
-                    old_sub = old_node[key]
-                    new_sub = new_node[key]
-
-                    if isinstance(old_sub, dict) and isinstance(new_sub, dict):
-                        full_path = f"{current_path}/{key}" if current_path else key 
-
-                        old_name = old_sub.get("_name")
-                        new_name = new_sub.get("_name")
-
-                        if old_name and new_name and old_name != new_name:
-                            print(f"[RENAME DETECTED] {full_path}: '{old_name}' ➜ '{new_name}'")
-                            doc_ref.update({self.firestore_path(f"{full_path}/_name"): new_name})
-
-                        recurse(old_sub, new_sub, full_path)
-
-        recurse(old_tree, new_tree, "")
-
-
-    def firestore_path(self, path):
-        return f"tree.{path.replace('/', '.')}"
-
-
-
-
-    def get_renamed_paths(self, old_tree, new_tree, parent_old="", parent_new=""):
-        renamed = {}
-
-        old_keys = set(old_tree.keys())
-        new_keys = set(new_tree.keys())
-
-        for key in old_keys & new_keys:
-            old_val = old_tree[key]
-            new_val = new_tree[key]
-
-            if key.startswith("d_") and isinstance(old_val, dict) and isinstance(new_val, dict):
-                old_name = old_val.get("_name", "")
-                new_name = new_val.get("_name", "")
-
-                old_parent = f"{parent_old}/{old_name}" if parent_old else old_name
-                new_parent = f"{parent_new}/{new_name}" if parent_new else new_name
-
-                # Ricorsione per le sottocartelle e file dentro questa cartella
-                renamed.update(self.get_renamed_paths(old_val, new_val, old_parent, new_parent))
-
-            elif key.startswith("f_"):
-                # Estrai il nome del file dai dizionari
-                old_file_name = old_val.get("_name") if isinstance(old_val, dict) else old_val
-                new_file_name = new_val.get("_name") if isinstance(new_val, dict) else new_val
-
-                old_path = f"{parent_old}/{old_file_name}" if parent_old else old_file_name
-                new_path = f"{parent_new}/{new_file_name}" if parent_new else new_file_name
-
-                if old_path != new_path:
-                    renamed[old_path] = new_path
-
-        return renamed
-
-    def get_named_path(self, tree, path):
-        parts = path.split("/")
-        named_parts = []
-        current = tree
-
-        for part in parts:
-            if part not in current:
-                raise KeyError(f"[ERROR] '{part}' non trovato nel tree a questo livello: {current.keys()}")
-
-            node = current[part]
-
-            if isinstance(node, dict):
-            
-                named_parts.append(node.get("_name", part))
-                current = node
-            else:
-                
-                print(f"[WARNING] Nodo '{part}' non è un dizionario: tipo={type(node)}, valore={node}")
-                named_parts.append(part)
-                current = {} 
-
-        return "/".join(named_parts)
-
-
-
-
-
-    def update_firestore(self, event, repo_name, doc_ref, cache_doc, timestamp):
-        MAX_RETRIES = 10
-
-        old_tree_realtime = event.data.before.get("tree", {})
-        print(f"[update_firestore] old realtime tree: {old_tree_realtime}")
-        new_tree_realtime = event.data.after.get("tree", {})
-        print(f"[update_firestore] new realtime tree: {new_tree_realtime}")
-        doc = doc_ref.get()
-        data = doc.to_dict()
-        old_tree_firestore = data.get("tree")
-        print(f"[update_firestore] old firestore tree: {old_tree_firestore}")
-        new_tree_firestore, last_modified_info = utils.split_tree_with_name(new_tree_realtime)
-        print(f"[update_firestore] new firestore tree: {new_tree_firestore}")
-        print(f"[update_firestore] new last_modified_info : {last_modified_info}")
-
-
-        old_tree, new_tree, old_info, new_info = create_tree_and_infos_names(event)
-        print(f"Initial tree  state for {repo_name} - old_tree: {old_tree}, new_tree: {new_tree}, doc_ref: {doc_ref}, old_info: {old_info}, new_info: {new_info}")
-
-        db = firestore.Client()
-        transaction = db.transaction()
-
-       
-
-        #renaming
-        self.detect_and_apply_renames(old_tree, new_tree, doc_ref, db)   
-        old_to_new_paths = self.get_renamed_paths(old_tree_realtime, new_tree_realtime)
-        
-
-        @firestore.transactional
-        def transaction_operation(transaction):
-            doc = doc_ref.get(transaction=transaction)
-            data = doc.to_dict() or {}
-            if "tree" not in data or not isinstance(data["tree"], dict):
-             data["tree"] = {}
-            
-            if "last-modified" not in data or not isinstance(data["last-modified"], dict):
-                data["last-modified"] = {}
-
-            for old_path, new_path in old_to_new_paths.items():
-                if old_path in data["last-modified"]:
-                    data["last-modified"][new_path] = data["last-modified"].pop(old_path)
-                    print(f"Updated last-modified from {old_path} to {new_path}")
-
-
-
-            old_paths = set(self.extract_file_paths(old_tree))
-            new_paths = set(self.extract_file_paths(new_tree))
-
-            print(f"Transaction update attempt: {repo_name}")
-            print("Old paths:", old_paths)
-            print("New paths:", new_paths)
-
-            if "tree" not in data or not isinstance(data["tree"], dict):
-                data["tree"] = {}
-            if "last-modified" not in data or not isinstance(data["last-modified"], dict):
-                data["last-modified"] = {}
-
-            
-           
-            for path in old_paths & new_paths:
-                if path.endswith("/_name"):
-                     continue
-                old_path_with_names=self.get_named_path(old_tree_realtime, path)
-                new_path_with_names=self.get_named_path(new_tree_realtime, path)
-                print("Renamed folders?", old_path_with_names!=new_path_with_names)
-                print(f"new path: ",old_path_with_names)
-                print(f"old path: ",new_path_with_names)
-                 
-
-
-          
-            modified = set()
-
-            for path in old_paths & new_paths:
-                if path.endswith("/_name"):
-                    continue
-
-                old_content = old_info.get(path, {}).get("content")
-                new_content = new_info.get(path, {}).get("content")
-                old_name = old_info.get(path, {}).get("_name")
-                new_name = new_info.get(path, {}).get("_name")
-
-                old_named_path = self.get_named_path(old_tree_realtime, path)
-                new_named_path = self.get_named_path(new_tree_realtime, path)
-
-                if (
-                    old_content != new_content
-                    or old_name != new_name
-                    or old_named_path != new_named_path
-                ):
-                    modified.add(path)
-            #deleting old paths that now have a different name
-            added = (new_paths - old_paths) - modified
-            deleted = (old_paths - new_paths) - modified
-
-            print("Modified paths:", modified)
-            print("Added paths:", added)
-            print("Deleted paths:", deleted)
-
-            for path in modified:
-                print(f"Modifying file at {path} (content or name changed)")
-                file_info = new_info.get(path, {})
-                content = file_info.get("content", "")
-                last_modifier = file_info.get("last-modifier", "")
-                uuid_cache = str(uuid.uuid4())
-                
-                print(f"Calling get_named_path with path={path} and type={type(path)}")
-                names_path= self.get_named_path(new_tree_realtime,path)
-
-                print(f"names path {names_path}")
-                print(f"path {path}")
-
-                # updates tree name
-                set_nested_dict(data["tree"], path, file_info.get("_name", ""))
-
-             
-                print(f"path in modified : {names_path}")
-                data["last-modified"][names_path] = {
-                    "last-modifier": last_modifier,
-                    "uuid_cache": uuid_cache,
-                    "timestamp": timestamp
-                }
-                print(f"Updating cahce in progress...path: {names_path} uuidcache: {uuid_cache},content: {content}")
-                update_cache_in_progress(cache_doc, uuid_cache, content, names_path, timestamp)        
-
-            for path in deleted:
-                print("To delete:", path)
-                try:
-                    remove_path_from_tree(data["tree"], path)
-                    remove_empty_parents(data["tree"], path)
-                    named_path = self.get_named_path(old_tree_realtime, path)
-                    data["last-modified"].pop(named_path, None)
-                    print(f"Deleted: {path}")
-                except Exception as e:
-                    print(f"Error deleting path {path} in transaction: {e}")
-
-            for path in added:
-                print("To add:", path)
-                
-                ensure_folders_exist_with_names(data["tree"], path, new_tree_realtime)
-                named_path=self.get_named_path(new_tree_realtime, path)
-                print(f"proper name is: {named_path}")
-                file_info = new_info.get(path, {})
-                content = file_info.get("content", "")
-                last_modifier = file_info.get("last-modifier", "")
-                new_file_name=self.get_name_from_path(new_tree_realtime,path)
-
-                if not content and not last_modifier:
-                    file_info = utils.insert_last_modified(new_info, timestamp).get("last-modified", {}).get(path, {})
-                    content = file_info.get("content", "")
-                    last_modifier = file_info.get("last-modifier", "")
-
-                uuid_cache = str(uuid.uuid4())
-
-                print(f"Adding file at {path} with content: {repr(content)} and last modifier: {last_modifier}")
-                set_nested_dict(data["tree"], path, new_file_name or "") #yu should put name of new file here
-                data["last-modified"][named_path] = {
-                    "last-modifier": last_modifier,
-                    "uuid_cache": uuid_cache,
-                    "timestamp": timestamp
-                }
-
-                update_cache_in_progress(cache_doc, uuid_cache, content, named_path, timestamp)
-
-            print(f"Tree after operations in transaction: {data['tree']}")
-            transaction.update(doc_ref, {
-                "tree": data["tree"],
-                "last-modified": data["last-modified"],
-                "last-edit": timestamp
-            })
-
-        for attempt in range(MAX_RETRIES):
-            try:
-                transaction_operation(transaction)
-                print(f"Firestore document updated successfully for {repo_name}")
-                break
-            except FailedPrecondition as e:
-                print(f"[RACE CONDITION] Transaction failed (attempt {attempt + 1}): {e}")
-                if attempt < MAX_RETRIES - 1:
-                    time.sleep(0.5 * (attempt + 1))
-                else:
-                    print("[ERROR] Max retries reached. Transaction aborted.")
-                    raise
-            except GoogleAPICallError as e:
-                print(f"[ERROR] Firestore API call failed during transaction: {e}")
-                raise
-
-    def extract_paths(self,tree, parent_path=""):
-        paths = []
-
-        for key, value in tree.items():
-            if key.startswith("d_") and isinstance(value, dict):
-              
-                folder_name = value.get("_name", "")
-             
-                new_parent_path = f"{parent_path}/{folder_name}" if parent_path else folder_name
-               
-                paths.extend(self.extract_paths(value, new_parent_path))
-
-            elif key.startswith("f_"):
-               
-                file_name = value
-            
-                file_path = f"{parent_path}/{file_name}" if parent_path else file_name
-                paths.append(file_path)
-
-        return paths
-    
-    def extract_file_id_to_path(self,tree, parent_path=""):
-        id_to_path = {}
-
-        for key, value in tree.items():
-            if key.startswith("d_") and isinstance(value, dict):
-                folder_name = value.get("_name", "")
-                new_parent_path = f"{parent_path}/{folder_name}" if parent_path else folder_name
-                id_to_path.update(self.extract_file_id_to_path(value, new_parent_path))
-
-            elif key.startswith("f_"):
-                file_id = key
-                file_name = value
-                file_path = f"{parent_path}/{file_name}" if parent_path else file_name
-                id_to_path[file_id] = file_path
-
-        return id_to_path
-    
-    def extract_paths_from_firestoreTree(self, firestore_tree, current_path=""):
-        paths = []
-        for key, value in firestore_tree.items():
-            if key.startswith("f_"):
-                file_path = f"{current_path}/{value}" if current_path else value
-                paths.append(file_path)
-            elif key.startswith("d_"):
-                subfolder = value
-                folder_name = subfolder.get("_name", key)
-                new_path = f"{current_path}/{folder_name}" if current_path else folder_name
-                paths.extend(self.extract_paths_from_firestoreTree(subfolder, new_path))
-        return paths
-
-
-    
-
-
-    def update_tree(self, old_tree, new_tree, repo_name, doc_ref, old_info, new_info, cache_doc, modified_content_paths):
+    def update_tree(self, repo_name, new_info, cache_doc,doc_ref, added, deleted, modified):
         repo = self.get_current_repo(repo_name)
-        print(f"[update_tree] {repo_name} | old_tree: {old_tree}, new_tree: {new_tree}, newinfo {new_info}")
+        print(f"[UPDATE_TREE] add: {added}, delete: {deleted}, modified: {modified}")
+        snapshot = doc_ref.get()
+        last_mod_items = snapshot.to_dict().get("last-modified", [])
+        print(f"QUEUE IN UPDATE_TREE: {last_mod_items}")
 
-        # Ensure Firestore queue is stable before proceeding
         MAX_WAIT = 8
         WAIT_INTERVAL = 1
         print("[sync] Waiting for Firestore to stabilize...")
@@ -753,95 +197,21 @@ class Repository:
         else:
             print("[sync] Timeout waiting for Firestore stabilization. Proceeding anyway.")
 
-        # Extract file paths from trees
-        old_paths = set(self.extract_paths(old_tree))
-        new_paths = set(self.extract_paths(new_tree))
-        print(f"Old paths {old_paths}")
-        print(f"New paths {new_paths}")
+        def get_queue_snapshot():
+            snapshot = cache_doc.reference.get()
+            update_time = snapshot.update_time
+            queue_items = snapshot.to_dict().get("queue_item", [])
+            print(f"[queue] {len(queue_items)} items")
+            print(f"QUEUE IN UPDATE_TREE: {queue_items}")
+            return snapshot, update_time, queue_items
 
-        # Extract ID-to-path mappings to detect renames
-        old_id_to_path = self.extract_file_id_to_path(old_tree)
-        new_id_to_path = self.extract_file_id_to_path(new_tree)
-
-        renamed_files = []
-        for file_id in old_id_to_path:
-            if file_id in new_id_to_path:
-                old_path = old_id_to_path[file_id]
-                new_path = new_id_to_path[file_id]
-                if old_path != new_path:
-                    renamed_files.append((old_path, new_path))
-
-        # ------------------------
-        # Handle Renamed Files
-        # ------------------------
-        snapshot = cache_doc.reference.get()
-        update_time = snapshot.update_time
-        queue_items = snapshot.to_dict().get("queue_item", [])
-        print(f"cache queue: {queue_items}")
-        snapshot = doc_ref.get()
-        new_info_dict = snapshot.to_dict() or {}
-        new_info=new_info_dict["last-modified"]
-        print(f"New info: {new_info}")
-        
-        for old_path, new_path in renamed_files:
-            print(f"[rename] {old_path} -> {new_path}")
-            try:
-                file_info = new_info.get(new_path, {})
-
-                print(f"File info last-modified: {file_info}")
-                
-                uuid_cache = file_info.get("uuid_cache", "")
-                if not uuid_cache:
-                    print(f"[warn] Missing uuid_cache for {new_path}, skipping")
-                    continue
-
-                content = None
-                snapshot = cache_doc.reference.get()
-                update_time = snapshot.update_time
-                queue_items = snapshot.to_dict().get("queue_item", [])
-                print(f"queue items: {queue_items}")
-                print(f"info uuid: {uuid_cache}")
-
-                for item in queue_items:
-                    if item.get("uuid_cache") == uuid_cache:
-                        content = item.get("content")
-                        break
-
-                if content is None:
-                    print(f"[warn] Content not found for {new_path} with uuid {uuid_cache}, skipping")
-                    continue
-
-                # Delete the old file and create the new one with the content
-                try:
-                    print(f"getting content of {old_path} to delete")
-                    file = repo.get_contents(old_path)
-                except GithubException as e:
-                    if e.status == 404:
-                        print(f"[warn] Old path {old_path} does not exist (404), skipping rename")
-                        continue
-                    else:
-                        raise
-                print(f"Deleting.. {old_path}")
-                repo.delete_file(old_path, f"Rename {old_path} to {new_path}", file.sha) #delete is slower tan creation
-                print(f"Creating.. {new_path}")
-                repo.create_file(new_path, f"Rename {old_path} to {new_path}", content)
-                time.sleep(5)
-
-                print(f"[rename] Successfully renamed {old_path} -> {new_path}")
-                clean_cache(old_path, cache_doc)
-                clean_cache(new_path, cache_doc)
-
-            except GithubException as e:
-                print(f"[error] Rename failed from {old_path} to {new_path}: {e}")
-
-        # Remove renamed paths from diff sets
-        old_paths -= {old for old, _ in renamed_files}
-        new_paths -= {new for _, new in renamed_files}
-
-        # ------------------------
-        # Handle Deleted Files
-        # ------------------------
-        for path in old_paths - new_paths:
+        # DELETE
+        for item in deleted:
+            print(f"[delete] {item}")
+            if isinstance(item, dict):
+                path = item.get("path")
+            else:
+                path = item  # string
             print(f"[delete] {path}")
             try:
                 safe_delete_file(repo, path)
@@ -850,113 +220,108 @@ class Repository:
             except GithubException as e:
                 if e.status == 409:
                     try:
-                        live_contents = repo.get_contents(path)
-                        repo.delete_file(path, f"Delete {path}", live_contents.sha)
+                        file = repo.get_contents(path)
+                        repo.delete_file(path, f"Delete {path}", file.sha)
                     except GithubException as e2:
                         print(f"[delete] Still failed to delete {path}: {e2}")
                 else:
                     raise
             clean_cache(path, cache_doc)
 
-        # ------------------------
-        # Handle Added Files
-        # ------------------------
-        for path in new_paths - old_paths:
-            print(f"[add] {path}")
+        # ADD
+        for item in added:
+            if isinstance(item, dict):
+                path = item.get("path")
+                last_mod_entry = last_mod_items.get(path)
+                if last_mod_entry:
+                    uuid_cache = last_mod_entry.get("uuid_cache")
+                else:
+                    uuid_cache = None
+                print(f"ADD - uuid_cache: {uuid_cache}")
+
             file_info = new_info.get(path, {})
-            uuid_cache = file_info.get("uuid_cache", "")
-            content = None
 
-            snapshot = cache_doc.reference.get()
-            update_time = snapshot.update_time
-            queue_items = snapshot.to_dict().get("queue_item", [])
+            snapshot, update_time, queue_items = get_queue_snapshot()
+            queue_item = next((i for i in queue_items if i.get("uuid_cache") == uuid_cache), None)
+            content = queue_item.get("content") if queue_item else None
 
-            for item in queue_items:
-                if item.get("uuid_cache") == uuid_cache:
-                    content = item.get("content")
-                    break
-
-            if content is None:
-                print(f"[warn] Content not found for {path} with uuid {uuid_cache}, skipping")
+            if not content:
+                print(f"[warn] Content not found for {path} (uuid: {uuid_cache}), skipping")
                 continue
 
             try:
-                # Remove queue item
-                to_remove = [item for item in queue_items if item.get("path") == path]
-                if to_remove:
-                    cache_doc.reference.update(
-                        {"queue_item": ArrayRemove(to_remove)},
-                        firestore.Client.write_option(last_update_time=update_time)
-                    )
-
-                # Create the file on GitHub
+                cache_doc.reference.update(
+                    {"queue_item": ArrayRemove([queue_item])},
+                    firestore.Client.write_option(last_update_time=update_time)
+                )
                 repo.create_file(path, f"Add {path}, version {uuid_cache}", content)
-                print(f"[add] Successfully created {path}")
+                print(f"[add] Created {path}")
             except FailedPrecondition:
-                print(f"[firestore] Precondition failed when adding {path}")
+                print(f"[firestore] Precondition failed for {path}")
             except GithubException as e:
-                print(f"[github] Failed to create {path}: {e}")
-                failed_status(item, cache_doc)
+                print(f"[github] Create failed: {e}")
+                if queue_item:
+                    failed_status(queue_item, cache_doc)
                 if e.status == 409:
                     time.sleep(1)
-                    repo.create_file(path, f"Add {path}, version {uuid_cache}", content)
-                    print(f"[add] Successfully created {path}")
-            except GithubException as e2:
-                print(f"[github] Still failed to recreate {path}: {e2}")
-
+                    try:
+                        repo.create_file(path, f"Add {path}, version {uuid_cache}", content)
+                        print(f"[add] Retry success: {path}")
+                    except GithubException as e2:
+                        print(f"[add] Still failed: {e2}")
             clean_cache(path, cache_doc)
 
-        # ------------------------
-        # Handle Modified Files
-        # ------------------------
-        
-       
-        print(f"queue items: {queue_items} ")
-        for path in modified_content_paths:
-           
+        # MODIFY
+        print(f"[modify] {modified}")
+        for item in modified:
+            if isinstance(item, dict):
+                path = item.get("path")
+            else:
+                path = item  # È una stringa
 
+            last_mod_entry = last_mod_items.get(path)
+            if last_mod_entry:
+                uuid_cache = last_mod_entry.get("uuid_cache")
+            else:
+                uuid_cache = None
+            print(f"MODIFY CONTENT - uuid_cache: {uuid_cache}")
+         
+            print(f"[modify] {path}")
 
-            old_uuid = old_info.get(path, {}).get("uuid_cache")
-            new_uuid = new_info.get(path, {}).get("uuid_cache")
-           
-           
-
-            if old_uuid == new_uuid:
-                continue  # No change
-          
-
-            print(f"[modify] Updating {path}")
             for attempt in range(10):
-                snapshot = cache_doc.reference.get()
-                update_time = snapshot.update_time
-                queue_items = snapshot.to_dict().get("queue_item", [])
-                item = next((i for i in queue_items if i.get("uuid_cache") == new_uuid), None)
-                if not item:
+                snapshot, update_time, queue_items = get_queue_snapshot()
+                queue_item = next((i for i in queue_items if i.get("uuid_cache") == uuid_cache), None)
+
+                if not queue_item:
                     time.sleep(0.5)
-                    continue  # Retry
+                    continue
 
                 try:
                     file = repo.get_contents(path)
-                    repo.update_file(path, f"Update {path}, version {new_uuid}", item["content"], file.sha)
-                    print(f"[modify] Updated {path} to version {new_uuid}")
-
-                    # Clean queue
-                    to_remove = [item]
-                    if to_remove:
-                        cache_doc.reference.update(
-                            {"queue_item": ArrayRemove(to_remove)},
-                            firestore.Client.write_option(last_update_time=update_time)
-                        )
+                    repo.update_file(
+                        path,
+                        f"Update {path}, version {uuid_cache}",
+                        queue_item["content"],
+                        file.sha
+                    )
+                    print(f"[modify] Updated {path} to version {uuid_cache}")
+                    cache_doc.reference.update(
+                        {"queue_item": ArrayRemove([queue_item])},
+                        firestore.Client.write_option(last_update_time=update_time)
+                    )
                     break
                 except GithubException as e:
-                    print(f"[github] Failed to update {path}: {e}")
+                    print(f"[github] Modify failed: {e}")
                     if e.status == 409:
                         time.sleep(1)
                         continue
-                    failed_status(item, cache_doc)
+                    failed_status(queue_item, cache_doc)
                     break
 
             clean_cache(path, cache_doc)
+
+
+
 
 
 
