@@ -200,7 +200,6 @@ def project_updated(event: firestore_fn.Event) -> None:
     print("Added paths:", added_paths)
 
     
-   
 
     # Step 2: Build added items
     renominated_adds = [{"uuid": uuid_id, "path": path} for uuid_id, path in new_uuid_map_last_mod.items() if path in renominated_items]
@@ -242,22 +241,7 @@ def project_deleted(event: firestore_fn.Event) -> None:
     db = firestore.client()
     project_id = data['id']
     print(f"Project {project_id} deleted from Firestore.")
-    users_id = data.get('co-authors', [])
-    print(f"Users to update: {users_id}")
-    if isinstance(users_id, dict):
-        users_id = list(users_id.values())
-    elif not isinstance(users_id, list):
-        users_id = [users_id]
-    #finds co-authors ids of the delelted project in users collection 
-    #and deleted the project for the "projects" field in each user document
-    user_docs = db.collection("users").where("id", "in", users_id).stream()
-    for user_doc in user_docs:
-        user_ref = user_doc.reference
-        user_data = user_doc.to_dict() or {}
-        projects = user_data.get("projects", [])
-        updated_projects = [proj for proj in projects if proj.get('id') != project_id]
-        print(f"Updating user {user_data.get('id')} projects: {updated_projects}")
-        user_ref.update({"projects": updated_projects})
+   
 
 
 

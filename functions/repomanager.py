@@ -154,8 +154,7 @@ class Repository:
             uuid_cache = file_info.get("uuid_cache")
             content = None
             for item in queue_items:
-                print(f"[DEBUG] Matching queue path {item.get('path')} == {path}? uuid_cache {item.get('uuid_cache')} == {uuid_cache}")
-
+               
                 if item.get("path") == path and item.get("uuid_cache") == uuid_cache:
                     content = item.get("content")
                     break
@@ -319,13 +318,6 @@ class Repository:
                     break
 
             clean_cache(path, cache_doc)
-
-
-
-
-
-
-
 
 
 
