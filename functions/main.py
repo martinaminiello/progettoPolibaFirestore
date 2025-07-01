@@ -162,13 +162,15 @@ def project_updated(event: firestore_fn.Event) -> None:
     print("RENOMINATED paths:", renominated_items)
     print("BEFORE RENOMINATED paths:", paths_before_renominated)
     
+  
     #MOVED PATHS
     moved_items = []
     paths_before_moved = []
 
     for uuid_id, path_old in uuid_map_tree.items():
         path_new = new_uuid_map_last_mod.get(uuid_id)
-        if path_new:  #excludes renominated paths
+        # Escludi i path già rinominati
+        if path_new and path_new not in renominated_items:
             if path_old != path_new and os.path.basename(path_old) == os.path.basename(path_new):
                 moved_items.append(path_new)
                 paths_before_moved.append(path_old)
@@ -202,6 +204,7 @@ def project_updated(event: firestore_fn.Event) -> None:
     renominated_adds = [{"uuid": uuid_id, "path": path} for uuid_id, path in new_uuid_map_last_mod.items() if path in renominated_items]
     moved_adds = [{"uuid": uuid_id, "path": path} for uuid_id, path in new_uuid_map_last_mod.items() if path in moved_items]
     final_added_items = added_items + renominated_adds + moved_adds
+    deleted_paths=deleted_paths+ paths_before_moved+ paths_before_renominated
 
     # Update the tree
     updated_tree = utils.update_firestore_tree(tree, final_added_items, deleted_paths)
