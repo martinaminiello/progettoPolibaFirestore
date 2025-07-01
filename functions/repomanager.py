@@ -276,7 +276,7 @@ class Repository:
             if isinstance(item, dict):
                 path = item.get("path")
             else:
-                path = item  # È una stringa
+                path = item  # item is a string
 
             last_mod_entry = last_mod_items.get(path)
             if last_mod_entry:
@@ -326,6 +326,6 @@ class Repository:
         repo = self.get_current_repo(repo_name)
         try:
             repo.delete()
-            print(f"Repository {repo_name} deleted successfully")
+            print(f"Repository {repo_name} deleted  successfully")
         except GithubException as e:
             print(f"Error deleting {repo}: {e}")

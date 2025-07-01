@@ -25,7 +25,7 @@ if not firebase_admin._apps:
 # that's the reason you will see repetitive code inside the cloud functions
 
 # With deployed cloud functions is not possible to load the token from an .env file
-#TOKENS CANNOT BE SHARED HERE (not even in comments) OR GITHUB WILL INTERCEPT AND DEACTIVATE THEM!!!
+#TOKENS CANNOT BE SHARED HERE (not even in comments) OR GITHUB WILL INTERCEPT THEM AND DEACTIVATE THEM!!!
 
 
 ########################################### FIRESTORE FUNCTIONS ########################################################
@@ -89,7 +89,7 @@ def project_created(event: firestore_fn.Event) -> None:
     try:
             repository.create_tree(paths, myuuid, last_modified_info, cache_doc)
     except Exception as e:
-            print(f"Errore in create_tree: {e}")
+            print(f"Error in create_tree: {e}")
 
 
 
@@ -122,9 +122,6 @@ def project_updated(event: firestore_fn.Event) -> None:
     paths_from_last_mod=utils.extract_paths_from_last_modified(new_info)
     print(f"Extract paths from last modified: {paths_from_last_mod}")
  
-
-    trees_different = tree != new_tree
-    print(f"Trees different? {trees_different}")
 
     last_modified_different=old_info!= new_info
     print(f"Last modified different? {last_modified_different}")
@@ -184,7 +181,7 @@ def project_updated(event: firestore_fn.Event) -> None:
     modified_content_items = [item for item in cache_list if item.get("modified") is True]
     modified_paths = [item["path"] for item in modified_content_items]
 
-    print(f"Modefied content paths: {modified_paths}")
+    print(f"Modified content paths: {modified_paths}")
 
     #ADDED PATHS
     added_items = [
@@ -201,17 +198,17 @@ def project_updated(event: firestore_fn.Event) -> None:
 
     
 
-    # Step 2: Build added items
+    # Build all added items
     renominated_adds = [{"uuid": uuid_id, "path": path} for uuid_id, path in new_uuid_map_last_mod.items() if path in renominated_items]
     moved_adds = [{"uuid": uuid_id, "path": path} for uuid_id, path in new_uuid_map_last_mod.items() if path in moved_items]
     final_added_items = added_items + renominated_adds + moved_adds
 
-    # Step 3: Update the tree
+    # Update the tree
     updated_tree = utils.update_firestore_tree(tree, final_added_items, deleted_paths)
     print(f"tree: {updated_tree}")
 
     if last_modified_different:
-        # Step 4: Write back to Firestore SOLO SE CAMBIA
+        # Update Firestore only if last-modified changes (last-modified changes trigger tree buildiing)
         doc_ref.update({"tree": updated_tree})
     else:
         print("No changes to tree, skipping Firestore update.")
@@ -231,7 +228,7 @@ def project_updated(event: firestore_fn.Event) -> None:
 
 @firestore_fn.on_document_deleted(document="projects/{docId}")
 def project_deleted(event: firestore_fn.Event) -> None:
-    print("On project deleted triggered")
+    print("On project deleted  triggered")
 
     repository=utils.initialized_repo()
 

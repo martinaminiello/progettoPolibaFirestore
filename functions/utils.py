@@ -13,7 +13,7 @@ def initialized_repo():
     g = Github(auth=auth)
     print(f"User {g.get_user().login}")
     u = User(token)
-    repository = Repository(u)
+    repository =  Repository(u)
     return repository
 
 
@@ -94,7 +94,7 @@ def generate_uuid_path_map_from_tree(tree, current_path=""):
 
     for key, value in tree.items():
         if key == "_name":
-            continue  # ignora _name come chiave esplicita, lo userai nel livello superiore
+            continue  # ignore _name 
 
         if isinstance(value, dict):
             folder_name = value.get("_name", "")
@@ -102,7 +102,7 @@ def generate_uuid_path_map_from_tree(tree, current_path=""):
             sub_map = generate_uuid_path_map_from_tree(value, sub_path)
             uuid_path_map.update(sub_map)
         elif isinstance(value, str):
-            # È un file, costruisci path completo
+            # file
             full_path = f"{current_path}{value}"
             uuid_path_map[key] = full_path
 
@@ -145,7 +145,7 @@ def update_firestore_tree(tree: dict, added_items: list, deleted_paths: list):
                 return  # Path not found
             current = folder_node
 
-        # Rimuove il file con nome corrispondente
+        # remove file
         for uuid_id, value in list(current.items()):
             if isinstance(value, str) and value == filename:
                 del current[uuid_id]
@@ -168,12 +168,12 @@ def update_firestore_tree(tree: dict, added_items: list, deleted_paths: list):
 
         current[uuid_id] = filename  # insert file
 
-    # === 1. Remove deleted/moved/renamed old paths ===
+    # Remove deleted/moved/renamed old paths 
     for path in deleted_paths:
         parts = path.strip("/").split("/")
         remove_from_tree(tree, parts)
 
-    # === 2. Add new/moved/renamed items ===
+    # Add new/moved/renamed items 
     for item in added_items:
         path = item.get("path")
         uuid_id = item.get("uuid")
