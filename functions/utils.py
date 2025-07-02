@@ -120,7 +120,17 @@ def generate_uuid_path_map_from_cache(content_list):
     return uuid_path_map
 
 
-
+def remove_empty_folders(subtree):
+    """Recursively remove empty folders (dicts with only '_name')."""
+    keys_to_delete = []
+    for uuid_id, node in list(subtree.items()):
+        if isinstance(node, dict):
+            remove_empty_folders(node)
+            #
+            if list(node.keys()) == ["_name"]:
+                keys_to_delete.append(uuid_id)
+    for uuid_id in keys_to_delete:
+        del subtree[uuid_id]
 
 
 def update_firestore_tree(tree: dict, added_items: list, deleted_paths: list):
@@ -184,13 +194,15 @@ def update_firestore_tree(tree: dict, added_items: list, deleted_paths: list):
         folder_parts = parts[:-1]
         insert_into_tree(tree, folder_parts, uuid_id, filename)
 
+    remove_empty_folders(tree)  
+
     return tree
 
 
 
 
 
-    
+
 
 
 

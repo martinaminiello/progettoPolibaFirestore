@@ -108,24 +108,27 @@ def project_updated(event: firestore_fn.Event) -> None:
     repo_name = doc_snapshot.get("repo_uuid")
     repo=repository.get_current_repo(repo_name)
 
-    tree = event.data.before.to_dict().get("tree", {})
-    print(f"Old tree: {tree}")
-    new_tree = event.data.after.to_dict().get("tree", {})
-    print(f"New tree: {new_tree}")
+   
 
     new_info=event.data.after.to_dict().get("last-modified", {})
     print(f"New info: {new_info}")
     old_info=event.data.before.to_dict().get("last-modified", {})
     print(f"Old info: {old_info}")
-    
-
-    paths_from_last_mod=utils.extract_paths_from_last_modified(new_info)
-    print(f"Extract paths from last modified: {paths_from_last_mod}")
- 
 
     last_modified_different=old_info!= new_info
     print(f"Last modified different? {last_modified_different}")
     
+    if not last_modified_different:
+        print("Last modified didn't change.")
+        return
+
+    paths_from_last_mod=utils.extract_paths_from_last_modified(new_info)
+    print(f"Extract paths from last modified: {paths_from_last_mod}")
+ 
+    tree = event.data.before.to_dict().get("tree", {})
+    print(f"Old tree: {tree}")
+    new_tree = event.data.after.to_dict().get("tree", {})
+    print(f"New tree: {new_tree}")
 
     cache_doc = utils.create_cache_doc(db)
     snapshot = cache_doc.reference.get()
@@ -210,20 +213,17 @@ def project_updated(event: firestore_fn.Event) -> None:
     updated_tree = utils.update_firestore_tree(tree, final_added_items, deleted_paths)
     print(f"tree: {updated_tree}")
 
-    if last_modified_different:
-        # Update Firestore only if last-modified changes (last-modified changes trigger tree buildiing)
-        doc_ref.update({"tree": updated_tree})
-    else:
-        print("No changes to tree, skipping Firestore update.")
+    
+    # Update Firestore only if last-modified changes (last-modified changes trigger tree buildiing)
+    doc_ref.update({"tree": updated_tree})
+    
 
     print(f"PATHS TO ADD: ", final_added_items)
     print(f"PATHS TO DELETE: ", deleted_paths)
     
-    if  last_modified_different:
-            print("Entering if to update tree")
-            repository.update_tree(repo_name, new_info, cache_doc, doc_ref, final_added_items, deleted_paths, modified_paths)
-    else:
-        print("No changes detected in tree or in the queue.")
+    
+    print("Entering if to update tree")
+    repository.update_tree(repo_name, new_info, cache_doc, doc_ref, final_added_items, deleted_paths, modified_paths)
    
  
     
